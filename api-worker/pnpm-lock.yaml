@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      libphonenumber-js:
+        specifier: ^1.13.14
+        version: 1.13.14
       rss-parser:
         specifier: ^3.13.0
         version: 3.13.0
@@ -536,6 +539,9 @@ packages:
     resolution: {integrity: sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==}
     engines: {node: '>=6'}
 
+  libphonenumber-js@1.13.14:
+    resolution: {integrity: sha512-llihgCcx0BFLksecLP+x1J+6JDE1GsXS1RN/LoPF6qcwpeQcnjj0lcvZxY8AzbEpYwyZWPZW/nDuqkqzm3amiw==}
+
   miniflare@5.20260926.0-alpha:
     resolution: {integrity: sha512-m/M3rpLnaouw6QSoKzylfw6Z1dnOwRM48idnZ7kc5ivRqBXANFQ8XqKCyQ/V+xqQ9Rg1L99j4WkZGVU9uT4L2w==}
     engines: {node: '>=22.0.0'}
@@ -964,6 +970,8 @@ snapshots:
     optional: true
 
   kleur@4.1.5: {}
+
+  libphonenumber-js@1.13.14: {}
 
   miniflare@5.20260926.0-alpha(@types/node@26.6.3):
     dependencies:

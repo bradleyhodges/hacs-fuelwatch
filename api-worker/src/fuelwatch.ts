@@ -369,7 +369,7 @@ export interface FuelWatchItemFields {
     "trading-name": string;
     location: string;
     address: string;
-    phone: string;
+    phone: string | null;
     latitude: string;
     longitude: string;
     "site-features": string;
@@ -503,7 +503,7 @@ export const normaliseFuelWatchItem = (
     tradingName: item["trading-name"],
     location: item.location,
     address: item.address,
-    phone: nullableText(item.phone),
+    phone: item.phone ? nullableText(item.phone) : null,
     latitude: parseFiniteNumber(item.latitude, "latitude", -90, 90),
     longitude: parseFiniteNumber(item.longitude, "longitude", -180, 180),
     siteFeatures: nullableText(item["site-features"]),

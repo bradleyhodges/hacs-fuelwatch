@@ -51,14 +51,14 @@ def main():
         ):
             continue
         source[relative.as_posix()] = path.read_bytes()
-    write_archive(output / "FuelWatch-WA-Plus-Source.zip", source)
+    write_archive(output / "FuelWatch-WA-Source.zip", source)
     install = {
         key: value
         for key, value in source.items()
         if key.startswith(("custom_components/", "blueprints/"))
         or key in {"README.md", "LICENSE", "VERIFICATION.md"}
     }
-    write_archive(output / "FuelWatch-WA-Plus-Install.zip", install)
+    write_archive(output / "FuelWatch-WA-Install.zip", install)
     card = {
         Path(key).name: value
         for key, value in source.items()
@@ -79,7 +79,7 @@ def main():
         + "\n"
     ).encode()
     card["README.md"] = (
-        b"# FuelWatch WA Card\n\nRequires the FuelWatch WA Plus integration. "
+        b"# FuelWatch WA Card\n\nRequires the FuelWatch WA integration. "
         b"Its sidebar and bundled card already work without this separate package.\n\n"
         b"To publish separately, put these files in a public GitHub repository and add it "
         b"as a HACS Dashboard repository. Register the resulting JavaScript module resource "

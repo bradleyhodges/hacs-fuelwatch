@@ -11,5 +11,8 @@
     "observability": { "enabled": true, "head_sampling_rate": 1 },
     "vars": {
         "FUELWATCH_URL": "https://www.fuelwatch.wa.gov.au/fuelwatch/fuelWatchRSS"
+    },
+    "secrets": {
+        "required": ["GOOGLE_MAPS_API_KEY"]
     }
 }

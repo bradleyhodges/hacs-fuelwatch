@@ -7,6 +7,8 @@ import {
     normaliseFuelWatchItem,
 } from "./fuelwatch";
 import { type FeedQuery, perthDate, shiftDate } from "./query";
+import parsePhoneNumber, { type PhoneNumber, NumberFormat } from 'libphonenumber-js'
+
 
 export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_STATIONS = 5000;
@@ -34,6 +36,17 @@ const text = (value: unknown, required = false, limit = 500): string => {
     )
         throw new Error("Invalid text field");
     return value.trim();
+};
+const number = (value: unknown, required = false): number => {
+    if (value === undefined && !required) return 0;
+    if (typeof value !== "number" && typeof value !== "string") throw new Error("Invalid number field");
+    if (typeof value === "string") {
+        const number = Number(value);
+        if (isNaN(number)) throw new Error("Invalid number field");
+        return number;
+    }
+    if (required && (isNaN(value) || typeof value !== "number")) throw new Error("Invalid number field");
+    return value;
 };
 
 /** rss-parser discards duplicate fields and trailing input; validate before projection. */
@@ -101,6 +114,23 @@ export async function parseFeed(
         const items: FuelWatchRssItem[] = [];
         for (const raw of feed.items) {
             const item = record(raw);
+            
+            let phoneNumber: string | null  = null;
+
+            // Try to parse the phone number
+            if (item.phone && typeof item.phone === "string") {
+                try {
+                    // Parse the phone number
+                    const parsedNumber = parsePhoneNumber(item.phone, { defaultCountry: "AU" });
+
+                    // If the phone number is parsed successfully, format it to E.164 format
+                    if (parsedNumber) phoneNumber = parsedNumber.format("E.164");
+                } catch (error) {
+                    console.error("Error parsing phone number", error);
+                    phoneNumber = null;
+                }
+            }
+            
             const quote: FuelWatchRssItem = {
                 title: text(item.title),
                 description: text(item.description, false, 10_000),
@@ -110,12 +140,13 @@ export async function parseFeed(
                 "trading-name": text(item["trading-name"], true),
                 location: text(item.location, true),
                 address: text(item.address, true),
-                phone: text(item.phone),
+                phone: phoneNumber || (item.phone ? text(item.phone) : null),
                 latitude: text(item.latitude, true),
                 longitude: text(item.longitude, true),
                 "site-features": text(item["site-features"], false, 10_000),
                 restrictions: text(item.restrictions, false, 10_000),
             };
+            
             if (quote.date !== expectedDate)
                 throw new Error("Unexpected quote date");
             normaliseFuelWatchItem(quote);
@@ -168,7 +199,8 @@ export async function parseFeed(
             };
         }
         return result;
-    } catch {
+    } catch (error) {
+        console.error("Error parsing feed", error, );
         throw new ApiError(
             502,
             "invalid_feed",

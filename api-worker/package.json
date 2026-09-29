@@ -28,6 +28,7 @@
         "wrangler": "^4.142.0"
     },
     "dependencies": {
+        "libphonenumber-js": "^1.13.14",
         "rss-parser": "^3.13.0",
         "sax": "1.6.1"
     },
