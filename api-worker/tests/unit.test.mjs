@@ -11,7 +11,7 @@ const output = fileURLToPath(
 await build({
     stdin: {
         contents:
-            'export * from "./src/cache"; export * from "./src/query"; export * from "./src/feed"; export * from "./src/upstream"; export * from "./src/fuelwatch";',
+            'export * from "./src/cache"; export * from "./src/query"; export * from "./src/feed"; export * from "./src/upstream"; export * from "./src/fuelwatch"; export * from "./src/snapshot";',
         resolveDir: fileURLToPath(new URL("..", import.meta.url)),
         loader: "ts",
     },
@@ -212,7 +212,7 @@ test("Perth calendar transitions include leap days and year boundaries", () => {
         "2028-02-29",
     );
     assert.equal(
-        query("Day=28/09/2026", "2026-09-29T05:59:59+08:00").upstream.get(
+        query("Day=28/09/2026", "2026-09-29T05:59:59+08:00").upstream[0].get(
             "Day",
         ),
         "yesterday",
@@ -227,8 +227,70 @@ test("canonical keys normalize defaults, suburb whitespace and date aliases", ()
     assert.equal(api.cacheKey(url, first).url, api.cacheKey(url, second).url);
     assert.notEqual(
         api.cacheKey(url, first).url,
-        api.cacheKey(new URL("https://worker.example/"), first).url,
+        api.cacheKey(new URL("https://worker.example/legacy"), first).url,
     );
+});
+
+test("query names and text values ignore case and surrounding whitespace", () => {
+    const result = query(
+        "pRoDuCt=4&dAy=ToDaY&sUbUrB=%20South%20%20Perth%20&SuRrOuNdInG=YeS&bRaNd=2",
+    );
+    assert.deepEqual(result.products, [4]);
+    assert.deepEqual(Object.fromEntries(result.upstream[0]), {
+        Brand: "2",
+        Day: "today",
+        Product: "4",
+        Suburb: "SOUTH PERTH",
+        Surrounding: "yes",
+    });
+});
+
+test("list filters expand every combination once and canonicalize equivalent requests", () => {
+    const first = query(
+        "brand=35,2,2&PRODUCT=6,2,1&Suburb=Perth,FREMANTLE,perth&day=TODAY",
+    );
+    const second = query(
+        "DAY=29/09/2026&product=1,2,6&brand=2,35&suburb=Fremantle,Perth",
+    );
+    assert.deepEqual(first.products, [1, 2, 6]);
+    assert.equal(first.upstream.length, 12);
+    assert.equal(new Set(first.upstream.map(String)).size, 12);
+    assert.equal(first.canonical.toString(), second.canonical.toString());
+    assert.deepEqual(
+        [...new Set(first.upstream.map((p) => p.get("Brand")))],
+        ["2", "35"],
+    );
+    assert.deepEqual(
+        [...new Set(first.upstream.map((p) => p.get("Suburb")))],
+        ["FREMANTLE", "PERTH"],
+    );
+    assert.ok(
+        first.upstream.every((p) =>
+            [...p.values()].every((v) => !v.includes(",")),
+        ),
+    );
+    assert.equal(
+        query("product=1,1").canonical.toString(),
+        query("product=1").canonical.toString(),
+    );
+    assert.equal(query("region=26,25&product=1,2").upstream.length, 4);
+});
+
+test("ambiguous keys, malformed lists and excessive filter combinations fail validation", () => {
+    for (const value of [
+        "Product=1&product=4",
+        "DAY=today&Day=TODAY",
+        "brand=2,",
+        "product=1,,2",
+        "product=1,999",
+        "region=25,999",
+        "suburb=perth,%20",
+        "suburb=perth,%0Atest",
+        "day=today,tomorrow",
+        "surrounding=yes,no",
+        "brand=2,35,5,6&product=1,2,4,5,6,10,11",
+    ])
+        assert.throws(() => query(value), { code: "invalid_query" }, value);
 });
 
 for (const [now, day, count, expected] of [

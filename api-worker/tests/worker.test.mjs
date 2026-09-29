@@ -51,7 +51,7 @@ beforeEach(() => {
 afterEach(async () => {
     await worker.dispose();
 });
-const fetchWorker = (path = "/", init) =>
+const fetchWorker = (path = "/legacy", init) =>
     worker.dispatchFetch(`https://fuelwatch.example${path}`, init);
 
 test("legacy JSON keeps fuel fields and RSS content", async () => {
@@ -163,9 +163,44 @@ test("versioned JSON excludes redundant descriptions and exposes provenance", as
 
 test("unknown paths and unsupported methods do not contact upstream", async () => {
     assert.equal((await fetchWorker("/missing")).status, 404);
-    const post = await fetchWorker("/", { method: "POST" });
+    const post = await fetchWorker("/legacy", { method: "POST" });
     assert.equal(post.status, 405);
     assert.equal(post.headers.get("Allow"), "GET, HEAD, OPTIONS");
+    assert.equal(requests.length, 0);
+});
+
+test("root redirects to v1 with list filters intact without fetching upstream", async () => {
+    const response = await fetchWorker("/?brand=2,35&product=1,2,6", {
+        redirect: "manual",
+    });
+    assert.equal(response.status, 302);
+    assert.equal(
+        response.headers.get("Location"),
+        "https://fuelwatch.example/v1?brand=2,35&product=1,2,6",
+    );
+    assert.equal(requests.length, 0);
+});
+
+test("root redirects preserve CORS and enforce method handling", async () => {
+    const redirect = await fetchWorker("/", {
+        redirect: "manual",
+        headers: { Origin: "https://client.example" },
+    });
+    assert.equal(redirect.headers.get("Access-Control-Allow-Origin"), "*");
+    const preflight = await fetchWorker("/", {
+        redirect: "manual",
+        method: "OPTIONS",
+        headers: {
+            Origin: "https://client.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("Access-Control-Allow-Origin"), "*");
+    assert.equal(
+        (await fetchWorker("/", { redirect: "manual", method: "POST" })).status,
+        405,
+    );
     assert.equal(requests.length, 0);
 });
 
@@ -184,7 +219,7 @@ test("cold HEAD succeeds and shares the GET cache entry", async () => {
 });
 
 test("CORS preflight does not require Access-Control-Request-Headers", async () => {
-    const response = await fetchWorker("/", {
+    const response = await fetchWorker("/legacy", {
         method: "OPTIONS",
         headers: {
             Origin: "https://app.example",
@@ -326,18 +361,22 @@ test("invalid, duplicate and unknown query values never contact upstream", async
         "Region=999",
         "Brand=-1",
     ]) {
-        assert.equal((await fetchWorker(`/?${query}`)).status, 400, query);
+        assert.equal(
+            (await fetchWorker(`/legacy?${query}`)).status,
+            400,
+            query,
+        );
     }
     assert.equal(requests.length, 0);
 });
 
 test("equivalent query order and absolute dates resolve to one cache key", async () => {
     const [year, month, day] = perthDate().split("-");
-    await (await fetchWorker("/?Product=4&Day=today")).text();
+    await (await fetchWorker("/legacy?Product=4&Day=today")).text();
     let result;
     for (let i = 0; i < 20; i++) {
         result = await fetchWorker(
-            `/?Day=${day}%2F${month}%2F${year}&Product=4`,
+            `/legacy?Day=${day}%2F${month}%2F${year}&Product=4`,
         );
         await result.text();
         if (result.headers.get("X-FuelWatch-Cache") === "HIT") break;
@@ -345,4 +384,129 @@ test("equivalent query order and absolute dates resolve to one cache key", async
     }
     assert.equal(result.headers.get("X-FuelWatch-Cache"), "HIT");
     assert.equal(new URL(requests[0]).searchParams.get("Day"), "today");
+});
+
+test("case-insensitive lists combine brands and products without mixing fuel prices", async () => {
+    origin = (request) => {
+        const params = new URL(request.url).searchParams;
+        const brand = params.get("Brand");
+        const product = params.get("Product");
+        assert.ok(["2", "35"].includes(brand));
+        assert.ok(["1", "2", "6"].includes(product));
+        assert.equal(params.get("Day"), "today");
+        return new Response(
+            xml()
+                .replace(
+                    "<brand>Example</brand>",
+                    `<brand>${brand === "2" ? "Ampol" : "EG Ampol"}</brand>`,
+                )
+                .replace("1 Test Road", `${brand} Test Road`)
+                .replace("185.9", String(180 + Number(product))),
+        );
+    };
+    const response = await fetchWorker(
+        "/v1?brand=2,35&product=1,2,6&day=ToDaY",
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.product, undefined);
+    assert.deepEqual(body.products, [1, 2, 6]);
+    assert.deepEqual(
+        body.feed.items.map((item) => [
+            item.product,
+            item.brand,
+            item.price.perLitre,
+        ]),
+        [
+            [1, "Ampol", 181],
+            [1, "EG Ampol", 181],
+            [2, "Ampol", 182],
+            [2, "EG Ampol", 182],
+            [6, "Ampol", 186],
+            [6, "EG Ampol", 186],
+        ],
+    );
+    assert.equal(requests.length, 6);
+    for (let i = 0; i < 20; i++) {
+        const hit = await fetchWorker(
+            "/v1?PRODUCT=6,2,1,1&BRAND=35,2&DAY=today",
+        );
+        const cached = await hit.json();
+        if (hit.headers.get("X-FuelWatch-Cache") === "HIT") {
+            assert.deepEqual(cached, body);
+            return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail("Equivalent lists never shared their cache entry");
+});
+
+test("overlapping region and suburb lists deduplicate stations per fuel product", async () => {
+    const response = await fetchWorker(
+        "/v1?region=25,26&suburb=PERTH,fremantle&product=1,2",
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(requests.length, 8);
+    assert.deepEqual(
+        body.feed.items.map((item) => item.product),
+        [1, 2],
+    );
+    const single = await fetchWorker("/v1?product=1,1&brand=2,35");
+    const singleBody = await single.json();
+    assert.equal(singleBody.product, 1);
+    assert.equal(singleBody.products, undefined);
+    assert.equal(singleBody.feed.items.length, 1);
+    assert.equal(singleBody.feed.items[0].product, undefined);
+});
+
+test("a failed component never produces or caches a partial combined snapshot", async () => {
+    let broken = true;
+    origin = (request) =>
+        new Response(
+            broken && new URL(request.url).searchParams.get("Product") === "2"
+                ? xml().replace("185.9", "bad")
+                : xml(),
+        );
+    const first = await fetchWorker("/v1?product=1,2");
+    assert.equal(first.status, 502);
+    assert.equal(first.headers.get("Cache-Control"), "no-store");
+    assert.equal((await first.json()).error.code, "invalid_feed");
+    broken = false;
+    const retry = await fetchWorker("/v1?PRODUCT=2,1");
+    assert.equal(retry.status, 200);
+    assert.equal((await retry.json()).feed.items.length, 2);
+    assert.equal(retry.headers.get("X-FuelWatch-Cache"), "MISS");
+});
+
+test("conflicting prices across overlapping filters fail the complete response", async () => {
+    origin = (request) =>
+        new Response(
+            xml().replace(
+                "185.9",
+                new URL(request.url).searchParams.get("Region") === "25"
+                    ? "181"
+                    : "182",
+            ),
+        );
+    const response = await fetchWorker("/v1?region=25,26");
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).error.code, "invalid_feed");
+});
+
+test("legacy supports product lists and keeps its cache separate from v1", async () => {
+    const response = await fetchWorker("/legacy?product=1,2");
+    assert.equal(response.status, 200);
+    assert.deepEqual(
+        (await response.json()).feed.items.map((item) => [
+            item.product,
+            item.price,
+        ]),
+        [
+            [1, "185.9"],
+            [2, "185.9"],
+        ],
+    );
+    const compact = await fetchWorker("/v1?product=1,2");
+    assert.equal((await compact.json()).feed.items[0].price.perLitre, 185.9);
 });

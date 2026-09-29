@@ -9,10 +9,13 @@ import {
 
 const DAY_MS = 86_400_000;
 export const PERTH_OFFSET_MS = 8 * 3_600_000;
+/** Bound multiplicative origin traffic before any cache lookup or network access. */
+export const MAX_FILTER_COMBINATIONS = 24;
+/** A canonical public selection and its finite, single-value upstream requests. */
 export interface FeedQuery {
-    product: FuelWatchProductId;
+    products: FuelWatchProductId[];
     sourceDate: string;
-    upstream: URLSearchParams;
+    upstream: URLSearchParams[];
     canonical: URLSearchParams;
 }
 
@@ -31,31 +34,85 @@ const invalid = (): never => {
     );
 };
 
-/** Validate before cache lookup or origin access, then normalize equivalent queries. */
+/**
+ * Validate case-insensitive query names/values and expand OR lists into upstream requests.
+ * @remarks FuelWatch silently ignores unsupported comma lists. Each expanded request contains
+ * one value per filter; their union implements OR within a filter and AND across filters.
+ * Repeated parameter names remain invalid even with different casing. List duplicates are harmless.
+ * Day and Surrounding remain scalar because a snapshot has one price period and one search mode.
+ */
 export function parseQuery(params: URLSearchParams, now: number): FeedQuery {
-    const allowed: readonly string[] = FUELWATCH_QUERY_PARAMETERS;
-    if (params.size > allowed.length || params.toString().length > 1024)
-        invalid();
-    for (const [name, value] of params) {
-        if (
-            !allowed.includes(name) ||
-            params.getAll(name).length !== 1 ||
-            !value.trim()
-        )
-            invalid();
-    }
-    const productText = params.get("Product") ?? "1";
     if (
-        !/^\d+$/.test(productText) ||
-        !Object.hasOwn(FUELWATCH_PRODUCTS, productText)
+        params.size > FUELWATCH_QUERY_PARAMETERS.length ||
+        params.toString().length > 1024
     )
         invalid();
-    // Membership was checked against the finite product catalogue above.
-    const product = Number(productText) as FuelWatchProductId;
+    const normalized = new URLSearchParams();
+    for (const [name, value] of params) {
+        const canonicalName = FUELWATCH_QUERY_PARAMETERS.find(
+            (key) => key.toLowerCase() === name.toLowerCase(),
+        );
+        if (
+            !canonicalName ||
+            normalized.has(canonicalName) ||
+            !value.trim() ||
+            [...value].some(
+                (character) =>
+                    character.charCodeAt(0) < 32 ||
+                    character.charCodeAt(0) === 127,
+            )
+        )
+            return invalid();
+        normalized.set(canonicalName, value.trim());
+    }
+    const filters = new Map<string, string[]>();
+    for (const [name, catalogue] of [
+        ["Product", FUELWATCH_PRODUCTS],
+        ["Brand", brands],
+        ["Region", regions],
+    ] as const) {
+        const raw = normalized.get(name) ?? (name === "Product" ? "1" : null);
+        if (raw === null) continue;
+        const values = raw.split(",").map((value) => value.trim());
+        if (
+            values.some(
+                (value) =>
+                    !/^\d+$/.test(value) || !Object.hasOwn(catalogue, value),
+            )
+        )
+            invalid();
+        filters.set(
+            name,
+            [...new Set(values)].sort((a, b) => Number(a) - Number(b)),
+        );
+    }
+    const suburb = normalized.get("Suburb");
+    if (suburb !== null) {
+        const values = suburb
+            .split(",")
+            .map((value) => value.trim().replace(/\s+/g, " ").toUpperCase());
+        if (values.some((value) => !value || value.length > 100)) invalid();
+        filters.set("Suburb", [...new Set(values)].sort());
+    }
+    const combinations = [...filters.values()].reduce(
+        (count, values) => count * values.length,
+        1,
+    );
+    if (combinations > MAX_FILTER_COMBINATIONS) {
+        throw new ApiError(
+            400,
+            "invalid_query",
+            `Request at most ${MAX_FILTER_COMBINATIONS} product/brand/region/suburb combinations; split larger selections into separate requests.`,
+        );
+    }
+    // Every product was checked against the finite catalogue above.
+    const products = (filters.get("Product") ?? ["1"]).map(
+        Number,
+    ) as FuelWatchProductId[];
     const today = perthDate(now);
     const days = [shiftDate(today, -1), today, shiftDate(today, 1)];
     const names = ["yesterday", "today", "tomorrow"];
-    const requested = params.get("Day") ?? "today";
+    const requested = normalized.get("Day")?.toLowerCase() ?? "today";
     let dayIndex = names.indexOf(requested);
     if (dayIndex < 0) {
         const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(requested);
@@ -64,54 +121,38 @@ export function parseQuery(params: URLSearchParams, now: number): FeedQuery {
         if (dayIndex < 0) invalid();
     }
     const sourceDate = days[dayIndex];
-    const upstream = new URLSearchParams({
-        Product: String(product),
+    const scalar = new URLSearchParams({
         Day: names[dayIndex],
     });
-    for (const [name, catalogue] of [
-        ["Region", regions],
-        ["Brand", brands],
-    ] as const) {
-        const value = params.get(name);
-        if (value !== null) {
-            if (!/^\d+$/.test(value) || !Object.hasOwn(catalogue, value))
-                invalid();
-            upstream.set(name, value);
-        }
+    const surrounding = normalized.get("Surrounding")?.toLowerCase();
+    if (surrounding !== undefined) {
+        if (surrounding !== "yes" && surrounding !== "no") invalid();
+        scalar.set("Surrounding", surrounding);
     }
-    const suburb = params.get("Suburb");
-    if (suburb !== null) {
-        if (
-            suburb.length > 100 ||
-            [...suburb].some(
-                (character) =>
-                    character.charCodeAt(0) < 32 ||
-                    character.charCodeAt(0) === 127,
-            )
-        )
-            invalid();
-        upstream.set(
-            "Suburb",
-            suburb.trim().replace(/\s+/g, " ").toUpperCase(),
+    let upstream = [scalar];
+    const canonical = new URLSearchParams(scalar);
+    for (const [name, values] of filters) {
+        canonical.set(name, values.join(","));
+        upstream = upstream.flatMap((params) =>
+            values.map((value) => {
+                const expanded = new URLSearchParams(params);
+                expanded.set(name, value);
+                return expanded;
+            }),
         );
     }
-    const surrounding = params.get("Surrounding");
-    if (surrounding !== null) {
-        if (surrounding !== "yes" && surrounding !== "no") invalid();
-        upstream.set("Surrounding", surrounding);
-    }
-    upstream.sort();
-    const canonical = new URLSearchParams(upstream);
+    for (const params of upstream) params.sort();
     canonical.set("Day", sourceDate);
-    return { product, sourceDate, upstream, canonical };
+    canonical.sort();
+    return { products, sourceDate, upstream, canonical };
 }
 
 /** Only configuration chooses the origin; client input supplies validated filters. */
-export function upstreamUrl(base: string, query: FeedQuery): URL {
+export function upstreamUrl(base: string, params: URLSearchParams): URL {
     const url = new URL(base);
     if (url.protocol !== "https:" || url.username || url.password)
         throw new Error("FUELWATCH_URL must be HTTPS without credentials");
-    url.search = query.upstream.toString();
+    url.search = params.toString();
     url.hash = "";
     return url;
 }

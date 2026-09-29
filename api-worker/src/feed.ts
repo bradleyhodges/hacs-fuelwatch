@@ -2,6 +2,7 @@ import { parser } from "sax";
 import { ApiError } from "./errors";
 import {
     createFuelWatchParser,
+    type FuelWatchProductId,
     type FuelWatchRssFeed,
     type FuelWatchRssItem,
     normaliseFuelWatchItem,
@@ -12,9 +13,8 @@ import { normaliseStation, type StationFeed } from "./station";
 export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_STATIONS = 5000;
 /** Snapshot provenance retained across station DTO changes so consumers can reject stale/wrong-day prices. */
-export interface FeedMetadata {
+interface SnapshotMetadata {
     schemaVersion: 1;
-    product: number;
     sourceDate: string;
     fetchedAt: string;
     validFrom: string;
@@ -22,10 +22,17 @@ export interface FeedMetadata {
     publicationStatus: "available" | "empty" | "not_yet_published";
 }
 
+/** Single-product clients retain their numeric product; combined responses enumerate all requested fuels. */
+export type FeedMetadata = SnapshotMetadata &
+    (
+        | { product: FuelWatchProductId; products?: never }
+        | { products: FuelWatchProductId[]; product?: never }
+    );
+
 /** Public /v1 response: source metadata plus normalized stations under feed.items. */
-export interface StationResponse extends FeedMetadata {
+export type StationResponse = FeedMetadata & {
     feed: StationFeed;
-}
+};
 
 const record = (value: unknown): Record<string, unknown> => {
     if (!value || typeof value !== "object" || Array.isArray(value))
@@ -208,7 +215,9 @@ export function metadata(
         local.getUTCHours() * 60 + local.getUTCMinutes() < 14 * 60 + 30;
     return {
         schemaVersion: 1,
-        product: query.product,
+        ...(query.products.length === 1
+            ? { product: query.products[0] }
+            : { products: query.products }),
         sourceDate: query.sourceDate,
         fetchedAt: new Date(now).toISOString(),
         validFrom: new Date(`${query.sourceDate}T06:00:00+08:00`).toISOString(),

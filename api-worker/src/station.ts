@@ -1,5 +1,9 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js";
-import type { FuelWatchRssFeed, FuelWatchRssItem } from "./fuelwatch";
+import type {
+    FuelWatchProductId,
+    FuelWatchRssFeed,
+    FuelWatchRssItem,
+} from "./fuelwatch";
 
 /** Canonical feature labels. Add aliases deliberately; never emit arbitrary source text here. */
 export const FEATURES = [
@@ -73,6 +77,8 @@ export interface StationEnrichment {
 
 /** Public /v1 station contract. Missing information is null/omitted, never guessed from examples. */
 export interface Station {
+    /** Present in multi-product responses so this quote's fuel type is unambiguous. */
+    product?: FuelWatchProductId;
     name: string;
     "trading-name": string;
     brand: string;

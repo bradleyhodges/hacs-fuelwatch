@@ -312,9 +312,12 @@ export async function refreshEnrichment(
             new URLSearchParams({ Product: product, Day: "today" }),
             clock(),
         );
-        const xml = await fetchFeed(upstreamUrl(env.FUELWATCH_URL, query), {
-            fetcher: options.fetcher,
-        });
+        const xml = await fetchFeed(
+            upstreamUrl(env.FUELWATCH_URL, query.upstream[0]),
+            {
+                fetcher: options.fetcher,
+            },
+        );
         const feed = await parseFeed(xml, query.sourceDate);
         // Bound transaction size, fence delayed jobs, and touch unchanged identities only once a day.
         for (let i = 0; i < feed.items.length; i += 50) {

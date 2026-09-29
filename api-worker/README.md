@@ -28,32 +28,38 @@ From the repository root, `python tools/test_api_adapter.py` runs the real Pytho
 ## HTTP contract
 
 - `GET /v1`: versioned JSON described below; used by Home Assistant.
-- `GET /`: legacy `{ "feed": ... }` representation retaining RSS descriptions and parser fields.
+- `GET /legacy`: legacy `{ "feed": ... }` representation retaining RSS descriptions and parser fields.
+- `GET /`: redirects to `/v1`, retaining query parameters.
 - `HEAD`: the same status and headers as GET, without a response body; shares its cache entry.
 - `OPTIONS`: public CORS preflight. GET, HEAD and OPTIONS are the only allowed methods.
 
-Both endpoints accept the same case-sensitive query names:
+Both data endpoints accept the same case-insensitive query names and text values:
 
 | Parameter | Accepted values | Default |
 | --- | --- | --- |
-| `Product` | `1`, `2`, `4`, `5`, `6`, `10`, `11` | `1` |
+| `Product` | One or more of `1`, `2`, `4`, `5`, `6`, `10`, `11`, comma-separated | `1` |
 | `Day` | `yesterday`, `today`, `tomorrow`, or `DD/MM/YYYY` within those three Perth calendar dates | `today` |
-| `Suburb` | Nonempty text up to 100 characters, without control characters | All suburbs |
-| `Region` | Region codes exported in `src/fuelwatch.ts` | All regions |
-| `Brand` | Brand codes exported in `src/fuelwatch.ts` | All brands |
+| `Suburb` | Comma-separated suburb names; each nonempty, at most 100 characters and without control characters | All suburbs |
+| `Region` | Comma-separated region codes exported in `src/fuelwatch.ts` | All regions |
+| `Brand` | Comma-separated brand codes exported in `src/fuelwatch.ts` | All brands |
 | `Surrounding` | `yes` or `no` | Origin default |
 
-Unknown or repeated parameters, invalid codes and unsupported dates return HTTP 400 before origin access. Suburb case/whitespace, query ordering and date aliases are normalized into cache keys. Absolute dates are translated to upstream relative days.
+List values are OR alternatives; different filters combine with AND. Whitespace is trimmed and duplicate list values are removed. Casing, list/query ordering, suburb whitespace and date aliases normalize into shared cache keys. Numeric filters use FuelWatch codes, not display names. `Day` and `Surrounding` each take one value. Unknown or repeated parameter names (including case variants), empty list entries, invalid codes and unsupported dates return HTTP 400 before origin access. Absolute dates translate to upstream relative days.
 
 ```sh
 curl 'https://fuelwatch.oss.bhodges.me/v1?Product=1&Day=today'
+curl 'https://fuelwatch.oss.bhodges.me/v1?brand=2,35&product=1,2,6&day=TODAY'
 ```
 
 The envelope contains `schemaVersion: 1`, numeric `product`, `sourceDate` (`YYYY-MM-DD`), UTC timestamps `fetchedAt`, `validFrom`, `validUntil`, `publicationStatus`, and `feed.items`.
 
+For multiple distinct products, the envelope uses `products: [1, 2, 6]` instead of `product`. Each item then includes its numeric `product`; a station selling three requested fuels appears once per station/product pair. Legacy multi-product items also include `product`. Single-product output remains unchanged. A combined `available` status means at least one quote, not that every requested fuel has prices.
+
+FuelWatch silently ignores unsupported comma lists, so the worker expands them into at most **24 product/brand/region/suburb combinations**. Larger selections return HTTP 400 with instructions to split them. A cache miss fetches at most three feeds concurrently within a shared eight-second deadline, including queued work and retries. All components must succeed and validate; failures or conflicting duplicate quotes reject the entire response without caching partial results. Overlaps deduplicate by station and product, with combined output sorted by product, price and identity. Combined input is limited to 16 MiB and output to 10,000 quotes. Channel metadata from an individual location is omitted when merging feeds.
+
 `publicationStatus` is `available` for a nonempty snapshot, `not_yet_published` for an empty tomorrow snapshot before 14:30 Perth, and `empty` for other valid empty results. Price periods run from 06:00 Perth on the source date to 06:00 the next day. Before 06:00, request yesterday for the currently effective price period. An explicit request for an expired period may return validated historical prices with `no-store`; its metadata retains the actual validity dates.
 
-`/v1` returns normalized station objects in **`feed.items`**, retaining the envelope so Home Assistant can verify product, source date and freshness. It omits redundant descriptions, `content`, `contentSnippet` and parser-generated `isoDate`. `/` retains the original flat RSS representation with E.164 phone numbers. The integration derives station IDs from FuelWatch address, suburb and numeric coordinates because distinct neighbouring sites can share an address. Brand or price changes keep identity; coordinate/address corrections change it. Existing address-only IDs are retained for the coordinates in the saved snapshots/catalogue, preserving configured selections. A saved station whose coordinates are unavailable or subsequently corrected may need reselection.
+`/v1` returns normalized station objects in **`feed.items`**, retaining the envelope so Home Assistant can verify product, source date and freshness. It omits redundant descriptions, `content`, `contentSnippet` and parser-generated `isoDate`. `/legacy` retains the original flat RSS representation with E.164 phone numbers. The integration derives station IDs from FuelWatch address, suburb and numeric coordinates because distinct neighbouring sites can share an address. Brand or price changes keep identity; coordinate/address corrections change it. Existing address-only IDs are retained for the coordinates in the saved snapshots/catalogue, preserving configured selections. A saved station whose coordinates are unavailable or subsequently corrected may need reselection.
 
 Example station (illustrative values):
 
@@ -174,6 +180,7 @@ ORDER BY next_attempt_at LIMIT 20;
 | Module | Responsibility |
 | --- | --- |
 | `src/index.ts` | HTTP/scheduled entrypoints, representation selection, ETags and cache publication. |
+| `src/snapshot.ts` | Bounded multi-filter fetches, whole-selection validation and station/product deduplication. |
 | `src/feed.ts`, `src/fuelwatch.ts` | XML validation, raw source types and price-period metadata. |
 | `src/station.ts` | Public DTOs, controlled vocabularies, phone/hours parsing and source-priority merge. |
 | `src/google.ts` | Bounded Places HTTP boundary, confidence matching, hours/facility conversion. |

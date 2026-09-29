@@ -7,11 +7,11 @@ import {
 } from "./cache";
 import { readEnrichments, refreshEnrichment } from "./enrichment";
 import { ApiError } from "./errors";
-import { metadata, parseFeed } from "./feed";
+import { metadata } from "./feed";
 import { ALLOWED_METHODS, corsHeaders, handleOptions } from "./httpOptions";
-import { parseQuery, upstreamUrl } from "./query";
+import { parseQuery } from "./query";
+import { loadSnapshot } from "./snapshot";
 import { normalisePhone, normaliseStation, stationKey } from "./station";
-import { fetchFeed } from "./upstream";
 
 /** Apply conditional/HEAD semantics and expose only the remaining shared-cache lifetime. */
 function deliver(
@@ -61,8 +61,13 @@ export default {
         const started = Date.now();
         try {
             const url = new URL(request.url);
-            if (url.pathname !== "/" && url.pathname !== "/v1")
+            if (
+                url.pathname !== "/v1" &&
+                url.pathname !== "/legacy" &&
+                url.pathname !== "/"
+            )
                 throw new ApiError(404, "not_found", "Endpoint not found.");
+
             if (request.method === "OPTIONS") return handleOptions(request);
             if (request.method !== "GET" && request.method !== "HEAD")
                 throw new ApiError(
@@ -70,14 +75,26 @@ export default {
                     "method_not_allowed",
                     "Use GET or HEAD to request prices.",
                 );
+            // Keep shorthand URLs usable in browsers, including CORS preflights and HEAD.
+            if (url.pathname === "/") {
+                url.pathname = "/v1";
+                return new Response(null, {
+                    status: 302,
+                    headers: {
+                        ...corsHeaders,
+                        Location: url.toString(),
+                        "Cache-Control": "no-store",
+                    },
+                });
+            }
             const query = parseQuery(url.searchParams, started);
             const key = cacheKey(url, query);
             const cached = await readCache(caches.default, key, started);
             if (cached) return deliver(cached, request, "HIT");
-            const xml = await fetchFeed(upstreamUrl(env.FUELWATCH_URL, query), {
+            const feed = await loadSnapshot(env.FUELWATCH_URL, query, {
                 signal: request.signal,
             });
-            const feed = await parseFeed(xml, query.sourceDate);
+            const multipleProducts = query.products.length > 1;
             const enrichment =
                 url.pathname === "/v1"
                     ? await readEnrichments(env.FUELWATCH_DB, feed.items)
@@ -94,27 +111,31 @@ export default {
                 ),
             );
             const body = JSON.stringify(
-                url.pathname === "/"
+                url.pathname === "/v1"
                     ? {
-                          feed: {
-                              ...feed,
-                              items: feed.items.map((item) => ({
-                                  ...item,
-                                  phone: normalisePhone(item.phone),
-                              })),
-                          },
-                      }
-                    : {
                           ...info,
                           feed: {
                               ...feed,
-                              items: feed.items.map((item) =>
-                                  normaliseStation(
+                              items: feed.items.map((item) => ({
+                                  ...normaliseStation(
                                       item,
                                       enrichment?.get(stationKey(item)),
                                       now,
                                   ),
-                              ),
+                                  ...(multipleProducts
+                                      ? { product: item.product }
+                                      : {}),
+                              })),
+                          },
+                      }
+                    : {
+                          feed: {
+                              ...feed,
+                              items: feed.items.map(({ product, ...item }) => ({
+                                  ...item,
+                                  phone: normalisePhone(item.phone),
+                                  ...(multipleProducts ? { product } : {}),
+                              })),
                           },
                       },
             );
@@ -144,7 +165,8 @@ export default {
                 );
             console.log({
                 event: "feed_fetched",
-                product: query.product,
+                products: query.products,
+                upstreamRequests: query.upstream.length,
                 sourceDate: query.sourceDate,
                 stations: feed.items.length,
                 durationMs: now - started,
@@ -152,6 +174,7 @@ export default {
             });
             return deliver(response, request, "MISS");
         } catch (error) {
+            console.error(error);
             const failure =
                 error instanceof ApiError
                     ? error
