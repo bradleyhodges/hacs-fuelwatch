@@ -1,0 +1,157 @@
+{
+	"before": {
+		"feed": {
+			"title": "FuelWatch Prices For All Metro Regions",
+			"items": [{
+					"title": "195.0: Billabong Roadhouse",
+					"description": "Address: Lot 2 North West Coastal Hwy, MEADOW, Open Mon: 06:00-20:30, Tue: 06:00-20:30, Wed: 06:00-20:30, Thu: 06:00-20:30, Fri: 06:00-20:30, Sat: 06:00-20:30, Sun: 06:00-20:30",
+					"brand": "Independent",
+					"date": "2026-09-29",
+					"price": "195.0",
+					"trading-name": "Billabong Roadhouse",
+					"location": "MEADOW",
+					"address": "Lot 2 North West Coastal Hwy",
+					"phone": null,
+					"latitude": "-26.81603300",
+					"longitude": "114.61426100",
+					"site-features": "Open Mon: 06:00-20:30, Tue: 06:00-20:30, Wed: 06:00-20:30, Thu: 06:00-20:30, Fri: 06:00-20:30, Sat: 06:00-20:30, Sun: 06:00-20:30",
+					"restrictions": "",
+					"content": "Address: Lot 2 North West Coastal Hwy, MEADOW, Open Mon: 06:00-20:30, Tue: 06:00-20:30, Wed: 06:00-20:30, Thu: 06:00-20:30, Fri: 06:00-20:30, Sat: 06:00-20:30, Sun: 06:00-20:30",
+					"contentSnippet": "Address: Lot 2 North West Coastal Hwy, MEADOW, Open Mon: 06:00-20:30, Tue: 06:00-20:30, Wed: 06:00-20:30, Thu: 06:00-20:30, Fri: 06:00-20:30, Sat: 06:00-20:30, Sun: 06:00-20:30",
+					"isoDate": "2026-09-29T00:00:00.000Z"
+				},
+				{
+					"title": "211.1: Shire of Wandering",
+					"description": "Address: 21 Watts St, WANDERING,",
+					"brand": "Quest Fuel",
+					"date": "2026-09-29",
+					"price": "211.1",
+					"trading-name": "Shire of Wandering",
+					"location": "WANDERING",
+					"address": "21 Watts St",
+					"phone": null,
+					"latitude": "-32.68059600",
+					"longitude": "116.67579300",
+					"site-features": "",
+					"restrictions": "Unmanned site (credit card charges may apply);",
+					"content": "Address: 21 Watts St, WANDERING,",
+					"contentSnippet": "Address: 21 Watts St, WANDERING,",
+					"isoDate": "2026-09-29T00:00:00.000Z"
+				},
+				{
+					"title": "212.9: Meekatharra Corner Store",
+					"description": "Address: 16 Main St, MEEKATHARRA, Phone: (08) 9981 1151,",
+					"brand": "BP",
+					"date": "2026-09-29",
+					"price": "212.9",
+					"trading-name": "Meekatharra Corner Store",
+					"location": "MEEKATHARRA",
+					"address": "16 Main St",
+					"phone": "+61899811151",
+					"latitude": "-26.59128300",
+					"longitude": "118.49647500",
+					"site-features": "",
+					"restrictions": "",
+					"content": "Address: 16 Main St, MEEKATHARRA, Phone: (08) 9981 1151,",
+					"contentSnippet": "Address: 16 Main St, MEEKATHARRA, Phone: (08) 9981 1151,",
+					"isoDate": "2026-09-29T00:00:00.000Z"
+				}
+			]
+		}
+	},
+	"after": {
+		"feed": {
+			"title": "FuelWatch Prices For All Metro Regions",
+			"items": [{
+					"name": "Billabong Roadhouse",
+					"trading-name": "Billabong Roadhouse",
+					"brand": "Independent",
+                    "price": {
+                        "perLitre": 195.0,
+                        "asAt": "2026-09-29T00:00:00.000+08:00"
+                    },
+                    "address": {
+                        "street": "Lot 2 North West Coastal Hwy",
+                        "suburb": "MEADOW",
+                        "state": "WA",
+                        "postcode": "6443"
+                    },
+                    "is24Hours": false,
+					"phone": null,
+					"latitude": -26.81603300,
+					"longitude": 114.61426100,
+                    "site-features": [
+                        "ATM", "Toilets", "EFTPOS"
+                    ],
+                    "open-hours": {
+                        "Monday": "06:00-20:30",
+                        "Tuesday": "06:00-20:30",
+                        "Wednesday": "06:00-20:30",
+                        "Thursday": "06:00-20:30",
+                        "Friday": "06:00-20:30",
+                        "Saturday": "06:00-20:30",
+                        "Sunday": "06:00-20:30"
+                    },
+					"restrictions": null
+				},
+				{
+					"name": "Shire of Wandering",
+					"trading-name": "Shire of Wandering",
+					"brand": "Quest Fuel",
+                    "price": {
+                        "perLitre": 211.1,
+                        "asAt": "2026-09-29T00:00:00.000+08:00"
+                    },
+                    "address": {
+                        "street": "21 Watts St",
+                        "suburb": "WANDERING",
+                        "state": "WA",
+                        "postcode": "6324"
+                    },
+                    "is24Hours": true,
+					"phone": null,
+					"latitude": -32.68059600,
+					"longitude": 116.67579300,
+                    "site-features": [
+                        "EFTPOS", "Open 24 hours"
+                    ],
+					"restrictions": [
+                        "Unmanned site (credit card charges may apply)"
+                    ]
+				},
+				{
+					"name": "Meekatharra Corner Store",
+					"trading-name": "Meekatharra Corner Store",
+					"brand": "BP",
+                    "price": {
+                        "perLitre": 212.9,
+                        "asAt": "2026-09-29T00:00:00.000+08:00"
+                    },
+                    "address": {
+                        "street": "16 Main St",
+                        "suburb": "MEEKATHARRA",
+                        "state": "WA",
+                        "postcode": "6630"
+                    },
+					"phone": "+61899811151",
+					"latitude": -26.59128300,
+					"longitude": 118.49647500,
+					"site-features": [
+                        "Fuel Cards", "ATM", "Toilets", "Bottled Gas", "EFTPOS", "Air", "Water", "Ice", "Discount", "Voucher"
+                    ],
+                    "is24Hours": false,
+					"restrictions": null,
+                    "open-hours": {
+                        "Monday": "06:00-20:30",
+                        "Tuesday": "06:00-20:30",
+                        "Wednesday": "06:00-20:30",
+                        "Thursday": "06:00-20:30",
+                        "Friday": "06:00-20:30",
+                        "Saturday": "06:00-20:30",
+                        "Sunday": "06:00-20:30"
+                    }
+				}
+			]
+		}
+	}
+}

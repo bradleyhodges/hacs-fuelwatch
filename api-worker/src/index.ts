@@ -1,10 +1,19 @@
-import { cacheKey, cacheTtl, readCache, writeCache } from "./cache";
+import {
+    cacheKey,
+    cacheTtl,
+    enrichmentTtl,
+    readCache,
+    writeCache,
+} from "./cache";
+import { readEnrichments, refreshEnrichment } from "./enrichment";
 import { ApiError } from "./errors";
-import { compactFeed, metadata, parseFeed } from "./feed";
+import { metadata, parseFeed } from "./feed";
 import { ALLOWED_METHODS, corsHeaders, handleOptions } from "./httpOptions";
 import { parseQuery, upstreamUrl } from "./query";
+import { normalisePhone, normaliseStation, stationKey } from "./station";
 import { fetchFeed } from "./upstream";
 
+/** Apply conditional/HEAD semantics and expose only the remaining shared-cache lifetime. */
 function deliver(
     response: Response,
     request: Request,
@@ -39,6 +48,11 @@ function deliver(
 }
 
 export default {
+    /** Refresh static station details separately from public requests and daily fuel prices. */
+    async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+        await refreshEnrichment(env);
+    },
+    /** Validate the complete upstream snapshot before publishing either public representation. */
     async fetch(
         request: Request,
         env: Env,
@@ -64,10 +78,15 @@ export default {
                 signal: request.signal,
             });
             const feed = await parseFeed(xml, query.sourceDate);
+            const enrichment =
+                url.pathname === "/v1"
+                    ? await readEnrichments(env.FUELWATCH_DB, feed.items)
+                    : undefined;
             const now = Date.now();
             const info = metadata(query, feed.items.length, now);
             // A request started just before a rollover cannot cache into the next period.
             const ttl = Math.min(
+                enrichmentTtl(enrichment?.values() ?? [], now),
                 cacheTtl(info, now),
                 Math.max(
                     0,
@@ -76,8 +95,28 @@ export default {
             );
             const body = JSON.stringify(
                 url.pathname === "/"
-                    ? { feed }
-                    : { ...info, feed: compactFeed(feed) },
+                    ? {
+                          feed: {
+                              ...feed,
+                              items: feed.items.map((item) => ({
+                                  ...item,
+                                  phone: normalisePhone(item.phone),
+                              })),
+                          },
+                      }
+                    : {
+                          ...info,
+                          feed: {
+                              ...feed,
+                              items: feed.items.map((item) =>
+                                  normaliseStation(
+                                      item,
+                                      enrichment?.get(stationKey(item)),
+                                      now,
+                                  ),
+                              ),
+                          },
+                      },
             );
             const hash = await crypto.subtle.digest(
                 "SHA-256",

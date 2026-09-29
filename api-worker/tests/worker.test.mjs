@@ -19,6 +19,10 @@ const xml = (fields = "", day = perthDate()) =>
 let worker;
 let requests;
 let origin;
+const migration = await readFile(
+    new URL("../migrations/0001_station_enrichment.sql", import.meta.url),
+    "utf8",
+);
 
 beforeEach(() => {
     requests = [];
@@ -32,7 +36,11 @@ beforeEach(() => {
             compatibilityFlags: ["nodejs_compat"],
             cf: false,
             log: new NoOpLog(),
-            bindings: { FUELWATCH_URL: "https://source.example/rss" },
+            bindings: {
+                FUELWATCH_URL: "https://source.example/rss",
+                GOOGLE_MAPS_API_KEY: "test-secret",
+            },
+            d1Databases: { FUELWATCH_DB: "worker-enrichment" },
             outboundService: (request) => {
                 requests.push(request.url);
                 return origin(request);
@@ -55,6 +63,85 @@ test("legacy JSON keeps fuel fields and RSS content", async () => {
     assert.equal(body.feed.items[0].content, "Station description");
 });
 
+test("public requests merge D1 data without contacting Google", async () => {
+    const db = await worker.getD1Database("FUELWATCH_DB");
+    await db.batch(
+        migration
+            .replace(/--[^\n]*/g, "")
+            .split(";")
+            .filter((sql) => sql.trim())
+            .map((sql) => db.prepare(sql)),
+    );
+    const now = Date.now();
+    const seed = {
+        name: "Example Station",
+        brand: "Example",
+        street: "1 Test Road",
+        suburb: "PERTH",
+        latitude: -31.95,
+        longitude: 115.86,
+    };
+    const cached = {
+        placeId: "test_place",
+        fetchedAt: new Date(now - 1000).toISOString(),
+        expiresAt: new Date(now + 86400_000).toISOString(),
+        postcode: "6000",
+        phone: "+61899811151",
+        features: ["Toilets"],
+        hours: {},
+        is24Hours: null,
+        googleMapsUri:
+            "https://www.google.com/maps/search/?api=1&query_place_id=test_place",
+        attributions: [],
+    };
+    await db
+        .prepare(
+            "INSERT INTO station_enrichment(station_key, seed_json, last_seen_at, enrichment_json) VALUES (?, ?, ?, ?)",
+        )
+        .bind(
+            JSON.stringify(["1 test road", "perth", -31.95, 115.86]),
+            JSON.stringify(seed),
+            now,
+            JSON.stringify(cached),
+        )
+        .run();
+    const response = await fetchWorker("/v1");
+    assert.equal(response.status, 200);
+    const station = (await response.json()).feed.items[0];
+    assert.equal(station.address.postcode, "6000");
+    assert.equal(station.phone, "+61899811151");
+    assert.equal(station.enrichment.provider, "Google Maps");
+    assert.equal(requests.length, 1);
+    assert.ok(
+        requests.every((url) => new URL(url).hostname === "source.example"),
+    );
+    // A fresh HTTP representation must not extend the provider's own retirement deadline.
+    cached.fetchedAt = new Date(
+        Date.now() - 30 * 86400_000 + 5000,
+    ).toISOString();
+    cached.expiresAt = new Date(Date.now() + 5000).toISOString();
+    await db
+        .prepare("UPDATE station_enrichment SET enrichment_json = ?")
+        .bind(JSON.stringify(cached))
+        .run();
+    const nearExpiry = await fetchWorker("/v1?Product=4");
+    const ttl = Number(
+        /s-maxage=(\d+)/.exec(nearExpiry.headers.get("Cache-Control"))?.[1] ??
+            0,
+    );
+    assert.ok(ttl <= 5);
+    assert.equal(
+        (await nearExpiry.json()).feed.items[0].address.postcode,
+        "6000",
+    );
+});
+
+test("legacy phone normalization preserves E.164 output", async () => {
+    origin = () => new Response(xml("<phone>(08) 9981 1151</phone>"));
+    const response = await fetchWorker();
+    assert.equal((await response.json()).feed.items[0].phone, "+61899811151");
+});
+
 test("versioned JSON excludes redundant descriptions and exposes provenance", async () => {
     const response = await fetchWorker("/v1?Product=4");
     const body = await response.json();
@@ -64,7 +151,13 @@ test("versioned JSON excludes redundant descriptions and exposes provenance", as
     assert.equal(body.publicationStatus, "available");
     assert.equal(body.feed.items[0].content, undefined);
     assert.equal(body.feed.items[0].contentSnippet, undefined);
-    assert.equal(body.feed.items[0].description, "Station description");
+    assert.equal(body.feed.items[0].description, undefined);
+    assert.equal(body.feed.items[0].price.perLitre, 185.9);
+    assert.equal(
+        body.feed.items[0].price.asAt,
+        `${perthDate()}T00:00:00.000+08:00`,
+    );
+    assert.equal(body.feed.items[0].address.suburb, "PERTH");
     assert.ok(body.fetchedAt && body.validFrom && body.validUntil);
 });
 

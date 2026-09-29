@@ -7,11 +7,11 @@ import {
     normaliseFuelWatchItem,
 } from "./fuelwatch";
 import { type FeedQuery, perthDate, shiftDate } from "./query";
-import parsePhoneNumber, { type PhoneNumber, NumberFormat } from 'libphonenumber-js'
-
+import { normaliseStation, type StationFeed } from "./station";
 
 export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_STATIONS = 5000;
+/** Snapshot provenance retained across station DTO changes so consumers can reject stale/wrong-day prices. */
 export interface FeedMetadata {
     schemaVersion: 1;
     product: number;
@@ -20,6 +20,11 @@ export interface FeedMetadata {
     validFrom: string;
     validUntil: string;
     publicationStatus: "available" | "empty" | "not_yet_published";
+}
+
+/** Public /v1 response: source metadata plus normalized stations under feed.items. */
+export interface StationResponse extends FeedMetadata {
+    feed: StationFeed;
 }
 
 const record = (value: unknown): Record<string, unknown> => {
@@ -36,17 +41,6 @@ const text = (value: unknown, required = false, limit = 500): string => {
     )
         throw new Error("Invalid text field");
     return value.trim();
-};
-const number = (value: unknown, required = false): number => {
-    if (value === undefined && !required) return 0;
-    if (typeof value !== "number" && typeof value !== "string") throw new Error("Invalid number field");
-    if (typeof value === "string") {
-        const number = Number(value);
-        if (isNaN(number)) throw new Error("Invalid number field");
-        return number;
-    }
-    if (required && (isNaN(value) || typeof value !== "number")) throw new Error("Invalid number field");
-    return value;
 };
 
 /** rss-parser discards duplicate fields and trailing input; validate before projection. */
@@ -97,7 +91,13 @@ function validateXml(xml: string): void {
     if (!rootSeen || channels !== 1) throw new Error("Missing RSS channel");
 }
 
-/** Validate a whole snapshot before publishing stations or writing to cache. */
+/**
+ * Validate a whole snapshot before publishing stations or writing to cache.
+ * @param xml Size-bounded UTF-8 RSS from the transport boundary.
+ * @param expectedDate Requested Perth source date, YYYY-MM-DD.
+ * @returns Validated raw quotes, retaining source text needed for enrichment precedence.
+ * @throws ApiError with invalid_feed; no partial price snapshot is published.
+ */
 export async function parseFeed(
     xml: string,
     expectedDate: string,
@@ -114,23 +114,7 @@ export async function parseFeed(
         const items: FuelWatchRssItem[] = [];
         for (const raw of feed.items) {
             const item = record(raw);
-            
-            let phoneNumber: string | null  = null;
 
-            // Try to parse the phone number
-            if (item.phone && typeof item.phone === "string") {
-                try {
-                    // Parse the phone number
-                    const parsedNumber = parsePhoneNumber(item.phone, { defaultCountry: "AU" });
-
-                    // If the phone number is parsed successfully, format it to E.164 format
-                    if (parsedNumber) phoneNumber = parsedNumber.format("E.164");
-                } catch (error) {
-                    console.error("Error parsing phone number", error);
-                    phoneNumber = null;
-                }
-            }
-            
             const quote: FuelWatchRssItem = {
                 title: text(item.title),
                 description: text(item.description, false, 10_000),
@@ -140,13 +124,14 @@ export async function parseFeed(
                 "trading-name": text(item["trading-name"], true),
                 location: text(item.location, true),
                 address: text(item.address, true),
-                phone: phoneNumber || (item.phone ? text(item.phone) : null),
+                // Keep source presence so enrichment cannot replace an unparseable supplied number.
+                phone: text(item.phone) || null,
                 latitude: text(item.latitude, true),
                 longitude: text(item.longitude, true),
                 "site-features": text(item["site-features"], false, 10_000),
                 restrictions: text(item.restrictions, false, 10_000),
             };
-            
+
             if (quote.date !== expectedDate)
                 throw new Error("Unexpected quote date");
             normaliseFuelWatchItem(quote);
@@ -200,7 +185,10 @@ export async function parseFeed(
         }
         return result;
     } catch (error) {
-        console.error("Error parsing feed", error, );
+        console.warn({
+            event: "feed_validation_failed",
+            reason: error instanceof Error ? error.name : "unknown",
+        });
         throw new ApiError(
             502,
             "invalid_feed",
@@ -236,16 +224,10 @@ export function metadata(
     };
 }
 
-/** Keep raw decimal strings, omitting parser-generated duplicate descriptions. */
-export function compactFeed(feed: FuelWatchRssFeed): FuelWatchRssFeed {
+/** Shape a validated feed into the normalized /v1 contract without performing provider lookups. */
+export function compactFeed(feed: FuelWatchRssFeed): StationFeed {
     return {
         ...feed,
-        items: feed.items.map((item) => {
-            const result = { ...item };
-            delete result.content;
-            delete result.contentSnippet;
-            delete result.isoDate;
-            return result;
-        }),
+        items: feed.items.map((item) => normaliseStation(item)),
     };
 }

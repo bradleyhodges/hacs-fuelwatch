@@ -6,6 +6,7 @@ import random
 import re
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from hashlib import sha256
 
 import aiohttp
@@ -52,7 +53,8 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
     if product not in PRODUCTS or len(payload) > MAX_RESPONSE:
         raise FeedError("Unsupported product or oversized response")
     try:
-        document = json.loads(payload, object_pairs_hook=_unique_object)
+        # Parse JSON decimal numbers directly to Decimal; never round cents through a binary float.
+        document = json.loads(payload, object_pairs_hook=_unique_object, parse_float=Decimal)
         if not isinstance(document, dict):
             raise ValueError("Expected a JSON object")
         if type(document.get("schemaVersion")) is not int or document["schemaVersion"] != 1:
@@ -84,8 +86,8 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
             if not isinstance(item, dict):
                 raise ValueError("Invalid station record")
 
-            def field(name: str, required: bool = True) -> str:
-                value = item.get(name, "")
+            def field(name: str, required: bool = True, source: dict | None = None) -> str:
+                value = (item if source is None else source).get(name, "")
                 if not isinstance(value, str) or len(value) > 500:
                     raise ValueError(f"Invalid {name}")
                 value = value.strip()
@@ -93,21 +95,30 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
                     raise ValueError(f"Invalid {name}")
                 return value
 
-            day = date.fromisoformat(field("date"))
-            if day != expected_date:
+            price = item.get("price")
+            address_fields = item.get("address")
+            if not isinstance(price, dict) or not isinstance(address_fields, dict):
+                raise ValueError("Expected structured price and address")
+            as_at = _timestamp(price.get("asAt"))
+            if as_at != datetime.combine(expected_date, time(), PERTH):
                 raise ValueError("Unexpected quote date")
-            latitude = float(decimal(field("latitude"), minimum=-90, maximum=90))
-            longitude = float(decimal(field("longitude"), minimum=-180, maximum=180))
-            address, suburb = field("address"), field("location")
+            for value in (item.get("latitude"), item.get("longitude"), price.get("perLitre")):
+                if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
+                    raise ValueError("Expected a JSON number")
+            latitude = float(decimal(item["latitude"], minimum=-90, maximum=90))
+            longitude = float(decimal(item["longitude"], minimum=-180, maximum=180))
+            address, suburb = field("street", source=address_fields), field("suburb", source=address_fields)
+            if address_fields.get("state") != "WA":
+                raise ValueError("Unexpected address state")
             # Neighbouring sites can share an address in the real feed. Include
             # coordinates, keeping identity independent of price and rebranding.
             station_id = _station_id(address, suburb, latitude, longitude)
             quote = Quote(
                 station_id=station_id,
                 product=product,
-                day=day,
-                price=decimal(field("price"), minimum="0.001", maximum=10000),
-                name=field("trading-name"),
+                day=expected_date,
+                price=decimal(price["perLitre"], minimum="0.001", maximum=10000),
+                name=field("name"),
                 brand=field("brand", False) or "Independent",
                 address=address,
                 suburb=suburb,

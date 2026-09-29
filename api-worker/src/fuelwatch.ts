@@ -381,7 +381,7 @@ export type FuelWatchRssItem = Parser.Item & FuelWatchItemFields;
 export type FuelWatchRssFeed = FuelWatchChannelFields &
     Parser.Output<FuelWatchItemFields>;
 
-/** JSON contract returned by this worker. */
+/** Legacy root JSON contract; /v1 uses StationResponse from feed.ts. */
 export interface FuelWatchApiResponse {
     feed: FuelWatchRssFeed;
 }

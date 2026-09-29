@@ -10,19 +10,25 @@
         "title": "FuelWatch",
         "items": [
             {
-                "title": "Example",
-                "description": "Station description",
+                "name": "Example Station",
                 "brand": "Example",
-                "date": "2026-09-29",
-                "price": "185.9",
+                "price": {
+                    "perLitre": 185.9,
+                    "asAt": "2026-09-29T00:00:00.000+08:00"
+                },
                 "trading-name": "Example Station",
-                "location": "PERTH",
-                "address": "1 Test Road",
-                "phone": "",
-                "latitude": "-31.95",
-                "longitude": "115.86",
-                "site-features": "",
-                "restrictions": ""
+                "address": {
+                    "street": "1 Test Road",
+                    "suburb": "PERTH",
+                    "state": "WA",
+                    "postcode": null
+                },
+                "phone": null,
+                "latitude": -31.95,
+                "longitude": 115.86,
+                "is24Hours": null,
+                "site-features": [],
+                "restrictions": null
             }
         ]
     }

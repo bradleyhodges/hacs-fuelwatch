@@ -10,9 +10,21 @@
     ],
     "observability": { "enabled": true, "head_sampling_rate": 1 },
     "vars": {
-        "FUELWATCH_URL": "https://www.fuelwatch.wa.gov.au/fuelwatch/fuelWatchRSS"
+        "FUELWATCH_URL": "https://www.fuelwatch.wa.gov.au/fuelwatch/fuelWatchRSS",
+        "GOOGLE_DAILY_REQUEST_LIMIT": "1000",
+        "ENRICHMENT_BATCH_SIZE": "500",
+        "ENRICHMENT_REFRESH_DAYS": "30"
     },
+    "triggers": { "crons": ["*/15 * * * *"] },
     "secrets": {
         "required": ["GOOGLE_MAPS_API_KEY"]
-    }
+    },
+    "d1_databases": [
+        {
+            "binding": "FUELWATCH_DB",
+            "database_name": "fuelwatch",
+            "database_id": "75bbb7d0-7095-402a-aa7f-88f740bf37e2",
+            "migrations_dir": "migrations"
+        }
+    ]
 }

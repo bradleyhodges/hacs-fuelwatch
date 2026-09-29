@@ -1,5 +1,29 @@
 import type { FeedMetadata } from "./feed";
 import { type FeedQuery, perthDate, shiftDate } from "./query";
+import type { StationEnrichment } from "./station";
+
+/**
+ * Limit edge freshness at provider refresh and retention boundaries.
+ * @param profiles Profiles read for this snapshot; no credentials or prices are present.
+ * @param now Response construction time in milliseconds.
+ * @returns Whole seconds until the earliest transition, or Infinity when there is no enrichment.
+ * @remarks Otherwise an edge hit could bypass D1's age check or keep a stale:false flag after expiry.
+ */
+export function enrichmentTtl(
+    profiles: Iterable<StationEnrichment>,
+    now: number,
+): number {
+    let deadline = Infinity;
+    for (const profile of profiles) {
+        const refresh = Date.parse(profile.expiresAt);
+        deadline = Math.min(
+            deadline,
+            Date.parse(profile.fetchedAt) + 30 * 86400_000,
+            refresh > now ? refresh : Infinity,
+        );
+    }
+    return Math.max(0, Math.floor((deadline - now) / 1000));
+}
 
 /** Expire at price/publication boundaries even when the origin advertises a longer TTL. */
 export function cacheTtl(info: FeedMetadata, now: number): number {
@@ -19,7 +43,7 @@ export function cacheTtl(info: FeedMetadata, now: number): number {
 /** Cache identity contains no client headers, ignored filters or relative dates. */
 export function cacheKey(request: URL, query: FeedQuery): Request {
     const url = new URL(
-        `/__fuelwatch_cache/v1/${request.pathname === "/" ? "legacy" : "compact"}`,
+        `/__fuelwatch_cache/stations-v2/${request.pathname === "/" ? "legacy" : "compact"}`,
         request.origin,
     );
     url.search = query.canonical.toString();

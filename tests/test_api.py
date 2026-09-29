@@ -13,15 +13,19 @@ from custom_components.fuelwatch_wa.api import FeedError, parse_feed
 DAY = date(2026, 9, 29)
 
 
-def feed(price="185.9", day="2026-09-29", brand="Test"):
+def feed(price=185.9, day="2026-09-29", brand="Test"):
     fixture = Path(__file__).parents[1] / "api-worker/tests/fixtures/fuelwatch-v1.json"
     data = json.loads(fixture.read_text())
-    data["feed"]["items"][0].update({"price": price, "date": day, "brand": brand})
+    data["feed"]["items"][0].update({"price": {"perLitre": price, "asAt": f"{day}T00:00:00.000+08:00"}, "brand": brand})
     return json.dumps(data).encode()
 
 
 def change(**values):
     return json.dumps(json.loads(feed()) | values).encode()
+
+
+def first_price(value):
+    return {"perLitre": value, "asAt": "2026-09-29T00:00:00.000+08:00"}
 
 
 def test_parse_quote_and_brand_independent_identity():
@@ -54,7 +58,10 @@ def test_parse_quote_and_brand_independent_identity():
         change(feed={"items": "invalid"}),
         feed(price=True),
         feed(price={"value": "185.9"}),
-        feed().replace(b'"price": "185.9"', b'"price": "185.9", "price": "100"'),
+        feed().replace(b'"perLitre": 185.9', b'"perLitre": 185.9, "perLitre": 100'),
+        feed().replace(b"T00:00:00.000+08:00", b"T00:00:00.000Z"),
+        feed().replace(b'"latitude": -31.95', b'"latitude": "-31.95"'),
+        feed().replace(b'"state": "WA"', b'"state": "NSW"'),
     ],
 )
 def test_untrusted_response_is_rejected_atomically(data):
@@ -73,7 +80,7 @@ def test_duplicate_station_validation_is_atomic():
     data = json.loads(feed())
     data["feed"]["items"] *= 2
     assert len(parse_feed(json.dumps(data).encode(), "1", DAY)) == 1
-    data["feed"]["items"][1] = data["feed"]["items"][1] | {"price": "199.9"}
+    data["feed"]["items"][1] = data["feed"]["items"][1] | {"price": first_price(199.9)}
     with pytest.raises(FeedError):
         parse_feed(json.dumps(data).encode(), "1", DAY)
 
@@ -81,7 +88,7 @@ def test_duplicate_station_validation_is_atomic():
 def test_neighbouring_stations_can_share_an_address():
     data = json.loads(feed())
     first = data["feed"]["items"][0]
-    data["feed"]["items"].append(first | {"longitude": "115.87", "price": "199.9"})
+    data["feed"]["items"].append(first | {"longitude": 115.87, "price": first_price(199.9)})
     quotes = parse_feed(json.dumps(data).encode(), "1", DAY)
     assert len(quotes) == 2
     assert quotes[0].station_id != quotes[1].station_id
@@ -150,7 +157,7 @@ async def test_saved_station_selections_survive_coordinate_identity_upgrade():
     old_id = sha256(b"1 test road|perth").hexdigest()[:24]
     saved = replace(parse_feed(feed(), "1", DAY)[0], station_id=old_id)
     data = json.loads(feed(brand="New brand"))
-    data["feed"]["items"].append(data["feed"]["items"][0] | {"longitude": "115.87"})
+    data["feed"]["items"].append(data["feed"]["items"][0] | {"longitude": 115.87})
     client = FuelWatchClient(FakeSession([FakeResponse(body=json.dumps(data).encode())]))
     client.restore_station_identity(saved)
     quotes = await client.fetch("1", DAY)
@@ -167,7 +174,7 @@ async def test_latest_saved_coordinate_replaces_ambiguous_old_identity_mapping()
     old_id = sha256(b"1 test road|perth").hexdigest()[:24]
     saved = replace(parse_feed(feed(), "1", DAY)[0], station_id=old_id)
     data = json.loads(feed())
-    data["feed"]["items"].append(data["feed"]["items"][0] | {"longitude": "115.87"})
+    data["feed"]["items"].append(data["feed"]["items"][0] | {"longitude": 115.87})
     client = FuelWatchClient(FakeSession([FakeResponse(body=json.dumps(data).encode())]))
     client.restore_station_identity(saved)
     client.restore_station_identity(replace(saved, longitude=115.87))

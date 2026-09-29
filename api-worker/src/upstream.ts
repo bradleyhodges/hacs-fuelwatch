@@ -8,10 +8,19 @@ interface FetchOptions {
     signal?: AbortSignal;
 }
 
-/** Bound decompressed bytes, including chunked responses without Content-Length. */
+/**
+ * Read a UTF-8 response within a byte budget, including chunked bodies without Content-Length.
+ * @param response Successful origin/provider response whose body this function owns.
+ * @param signal Shared request deadline; aborting also cancels the stream reader.
+ * @param maximumBytes Maximum decompressed size (4 MiB RSS; callers use 256 KiB for Places).
+ * @returns Strictly decoded text; the caller validates the format and schema.
+ * @throws ApiError for missing bodies, invalid UTF-8 or size violations; provider callers remap it.
+ * @remarks Reader cleanup is deliberately not awaited because a stalled origin must not extend the deadline.
+ */
 export async function readBounded(
     response: Response,
     signal: AbortSignal,
+    maximumBytes = MAX_RESPONSE_BYTES,
 ): Promise<string> {
     if (!response.body)
         throw new ApiError(
@@ -33,7 +42,7 @@ export async function readBounded(
             signal.throwIfAborted();
             if (done) break;
             bytes += value.byteLength;
-            if (bytes > MAX_RESPONSE_BYTES)
+            if (bytes > maximumBytes)
                 throw new ApiError(
                     502,
                     "response_too_large",

@@ -27,6 +27,143 @@ const query = (value, now = "2026-09-29T16:00:00+08:00") =>
     api.parseQuery(new URLSearchParams(value), time(now));
 const source = new URL("https://source.example/rss");
 
+test("response freshness stops at provider refresh and hard age boundaries", () => {
+    const now = time("2026-09-29T08:00:00Z");
+    const profile = {
+        fetchedAt: new Date(now - 1000).toISOString(),
+        expiresAt: new Date(now + 60_000).toISOString(),
+    };
+    assert.equal(api.enrichmentTtl([profile], now), 60);
+    assert.equal(
+        api.enrichmentTtl(
+            [
+                {
+                    ...profile,
+                    fetchedAt: new Date(
+                        now - 30 * 86400_000 + 900,
+                    ).toISOString(),
+                },
+            ],
+            now,
+        ),
+        0,
+    );
+    assert.equal(
+        api.enrichmentTtl(
+            [{ ...profile, expiresAt: new Date(now - 1000).toISOString() }],
+            now,
+        ),
+        30 * 86400 - 1,
+    );
+    assert.equal(api.enrichmentTtl([], now), Infinity);
+});
+
+const example = JSON.parse(
+    await readFile(new URL("../example.json", import.meta.url), "utf8"),
+);
+const station = (overrides = {}) =>
+    api.compactFeed({
+        title: "FuelWatch",
+        items: [{ ...example.before.feed.items[0], ...overrides }],
+    }).items[0];
+
+test("station JSON has structured cents-per-litre price, Perth source date and numeric coordinates", () => {
+    const result = station();
+    assert.equal(result.name, "Billabong Roadhouse");
+    assert.equal(result["trading-name"], result.name);
+    assert.deepEqual(result.price, {
+        perLitre: 195,
+        asAt: "2026-09-29T00:00:00.000+08:00",
+    });
+    assert.deepEqual(result.address, {
+        street: "Lot 2 North West Coastal Hwy",
+        suburb: "MEADOW",
+        state: "WA",
+        postcode: null,
+    });
+    assert.equal(result.latitude, -26.816033);
+    assert.equal(result.longitude, 114.614261);
+    assert.equal(result.description, undefined);
+    assert.equal(result.is24Hours, false);
+    assert.equal(result["open-hours"].Monday, "06:00-20:30");
+});
+
+test("features and restrictions use closed canonical vocabularies and keep unknown notes", () => {
+    const result = station({
+        "site-features":
+            "Fuel Cards ATM Toilets Bottled Gas EFTPOS ATM Water Ice Discount Voucher Mystery facility, Open 24 hours",
+        restrictions:
+            "Unmanned site (credit card charges may apply); Membership Required; Unknown condition;",
+    });
+    assert.deepEqual(result["site-features"], [
+        "Fuel Cards",
+        "ATM",
+        "Toilets",
+        "Bottled Gas",
+        "EFTPOS",
+        "Water",
+        "Ice",
+        "Discount",
+        "Voucher",
+        "Open 24 hours",
+    ]);
+    assert.deepEqual(result.restrictions, [
+        "Unmanned site (credit card charges may apply)",
+        "Membership Required",
+    ]);
+    assert.deepEqual(result["source-notes"].features, ["Mystery facility"]);
+    assert.deepEqual(result["source-notes"].restrictions, [
+        "Unknown condition",
+    ]);
+    assert.equal(result.is24Hours, true);
+    assert.equal(result["open-hours"], undefined);
+});
+
+test("opening hours expand day ranges and preserve closed days and overnight shifts", () => {
+    const result = station({
+        "site-features": "Open Mon-Fri: 06:00-20:30, Sat: 20:00-02:00, Sun: -",
+    });
+    assert.deepEqual(result["open-hours"], {
+        Monday: "06:00-20:30",
+        Tuesday: "06:00-20:30",
+        Wednesday: "06:00-20:30",
+        Thursday: "06:00-20:30",
+        Friday: "06:00-20:30",
+        Saturday: "20:00-02:00",
+        Sunday: "Closed",
+    });
+    assert.equal(result.is24Hours, false);
+});
+
+test("absent or unparseable hours are unknown and retain source text", () => {
+    const missing = station({ "site-features": "", restrictions: "" });
+    assert.equal(missing.is24Hours, null);
+    assert.equal(missing["open-hours"], undefined);
+    assert.deepEqual(missing["site-features"], []);
+    assert.equal(missing.restrictions, null);
+    const invalid = station({ "site-features": "Open Mon: 99:00-20:00" });
+    assert.equal(invalid["open-hours"], undefined);
+    assert.equal(invalid.is24Hours, null);
+    assert.equal(
+        invalid["source-notes"]["open-hours"],
+        "Open Mon: 99:00-20:00",
+    );
+});
+
+test("phone numbers are valid E.164 or null, with invalid source values retained separately", () => {
+    assert.equal(station({ phone: "(08) 9981 1151" }).phone, "+61899811151");
+    assert.equal(station({ phone: "+61899811151" }).phone, "+61899811151");
+    for (const phone of [
+        null,
+        "",
+        "123",
+        "call 08 9981 1151 or 04 1234 5678",
+    ]) {
+        assert.equal(station({ phone }).phone, null);
+    }
+    assert.equal(station({ phone: "123" })["source-notes"].phone, "123");
+});
+
 test("worker output matches the Home Assistant contract fixture", async () => {
     const expected = JSON.parse(
         await readFile(
@@ -34,7 +171,18 @@ test("worker output matches the Home Assistant contract fixture", async () => {
             "utf8",
         ),
     );
-    const fields = Object.entries(expected.feed.items[0])
+    const fields = Object.entries({
+        title: "Example",
+        description: "Station description",
+        brand: "Example",
+        date: expected.sourceDate,
+        price: "185.9",
+        "trading-name": "Example Station",
+        address: "1 Test Road",
+        location: "PERTH",
+        latitude: "-31.95",
+        longitude: "115.86",
+    })
         .map(([key, value]) => `<${key}>${value}</${key}>`)
         .join("");
     const feed = await api.parseFeed(
