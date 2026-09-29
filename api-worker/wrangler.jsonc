@@ -11,7 +11,7 @@
     "observability": { "enabled": true, "head_sampling_rate": 1 },
     "vars": {
         "FUELWATCH_URL": "https://www.fuelwatch.wa.gov.au/fuelwatch/fuelWatchRSS",
-        "GOOGLE_DAILY_REQUEST_LIMIT": "1000",
+        "GOOGLE_DAILY_REQUEST_LIMIT": "300",
         "ENRICHMENT_BATCH_SIZE": "100",
         "ENRICHMENT_REFRESH_DAYS": "30"
     },
@@ -26,5 +26,8 @@
             "database_id": "75bbb7d0-7095-402a-aa7f-88f740bf37e2",
             "migrations_dir": "migrations"
         }
-    ]
+    ],
+    "placement": {
+        "mode": "smart"
+    }
 }
