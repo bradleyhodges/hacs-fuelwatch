@@ -138,7 +138,7 @@ test("FuelWatch missing-phone sentinel permits Google fallback while explicit de
         now + 5000,
     );
     assert.equal(missing.phone, "+61899811151");
-    assert.equal(missing["source-notes"]?.phone, undefined);
+    assert.equal(missing.sourceNotes?.phone, undefined);
     const supplied = api.normaliseStation(
         {
             ...item,
@@ -149,8 +149,8 @@ test("FuelWatch missing-phone sentinel permits Google fallback while explicit de
         now + 5000,
     );
     assert.equal(supplied.phone, "+61892223333");
-    assert.equal(supplied["open-hours"].Monday, "06:00-20:00");
-    assert.deepEqual(supplied["site-features"], ["ATM", "Toilets"]);
+    assert.equal(supplied.openHours.Monday, "06:00-20:00");
+    assert.deepEqual(supplied.siteFeatures, ["ATM", "Toilets"]);
 });
 
 test("24-hour status reflects the merged schedule without overriding source hours", async () => {
@@ -180,7 +180,7 @@ test("24-hour status reflects the merged schedule without overriding source hour
         now + 5000,
     );
     assert.equal(always.is24Hours, true);
-    assert.ok(always["site-features"].includes("Open 24 hours"));
+    assert.ok(always.siteFeatures.includes("Open 24 hours"));
     extra.hours = {};
     assert.equal(
         api.normaliseStation(
@@ -196,8 +196,8 @@ test("24-hour status reflects the merged schedule without overriding source hour
         now + 5000,
     );
     assert.equal(limitedSource.is24Hours, false);
-    assert.equal(limitedSource["open-hours"].Monday, "06:00-20:00");
-    assert.equal(limitedSource["open-hours"].Tuesday, "00:00-24:00");
+    assert.equal(limitedSource.openHours.Monday, "06:00-20:00");
+    assert.equal(limitedSource.openHours.Tuesday, "00:00-24:00");
 });
 
 test("the exported scheduled entrypoint actually refreshes the bound database", async () => {

@@ -107,10 +107,15 @@ test("public requests merge D1 data without contacting Google", async () => {
         .run();
     const response = await fetchWorker("/v1");
     assert.equal(response.status, 200);
-    const station = (await response.json()).feed.items[0];
+    const station = (await response.json()).data[0].attributes;
     assert.equal(station.address.postcode, "6000");
     assert.equal(station.phone, "+61899811151");
     assert.equal(station.enrichment.provider, "Google Maps");
+    assert.ok(station.enrichment.fetchedAt.endsWith("+08:00"));
+    assert.equal(
+        Date.parse(station.enrichment.fetchedAt),
+        Date.parse(cached.fetchedAt),
+    );
     assert.equal(requests.length, 1);
     assert.ok(
         requests.every((url) => new URL(url).hostname === "source.example"),
@@ -131,7 +136,7 @@ test("public requests merge D1 data without contacting Google", async () => {
     );
     assert.ok(ttl <= 5);
     assert.equal(
-        (await nearExpiry.json()).feed.items[0].address.postcode,
+        (await nearExpiry.json()).data[0].attributes.address.postcode,
         "6000",
     );
 });
@@ -145,20 +150,129 @@ test("legacy phone normalization preserves E.164 output", async () => {
 test("versioned JSON excludes redundant descriptions and exposes provenance", async () => {
     const response = await fetchWorker("/v1?Product=4");
     const body = await response.json();
-    assert.equal(body.schemaVersion, 1);
-    assert.equal(body.product, 4);
-    assert.equal(body.sourceDate, perthDate());
-    assert.equal(body.publicationStatus, "available");
-    assert.equal(body.feed.items[0].content, undefined);
-    assert.equal(body.feed.items[0].contentSnippet, undefined);
-    assert.equal(body.feed.items[0].description, undefined);
-    assert.equal(body.feed.items[0].price.perLitre, 185.9);
-    assert.equal(
-        body.feed.items[0].price.asAt,
-        `${perthDate()}T00:00:00.000+08:00`,
+    assert.deepEqual(Object.keys(body).sort(), ["data", "jsonapi", "meta"]);
+    assert.equal(body.jsonapi.version, "1.1");
+    assert.equal(body.meta.product, 4);
+    assert.equal(body.meta.sourceDate, perthDate());
+    assert.equal(body.meta.publicationStatus, "available");
+    assert.equal(body.data[0].type, "fuelPrices");
+    assert.equal(typeof body.data[0].id, "string");
+    const attributes = body.data[0].attributes;
+    assert.equal(attributes.product, 4);
+    assert.equal(attributes.tradingName, "Example Station");
+    assert.deepEqual(attributes.siteFeatures, []);
+    assert.equal(attributes.content, undefined);
+    assert.equal(attributes.contentSnippet, undefined);
+    assert.equal(attributes.description, undefined);
+    assert.equal(attributes.price.perLitre, 185.9);
+    assert.equal(attributes.price.asAt, `${perthDate()}T00:00:00.000+08:00`);
+    assert.equal(attributes.address.suburb, "PERTH");
+    assert.ok(
+        body.meta.fetchedAt && body.meta.validFrom && body.meta.validUntil,
     );
-    assert.equal(body.feed.items[0].address.suburb, "PERTH");
-    assert.ok(body.fetchedAt && body.validFrom && body.validUntil);
+    for (const field of ["fetchedAt", "validFrom", "validUntil"])
+        assert.ok(body.meta[field].endsWith("+08:00"), field);
+    assert.equal(
+        response.headers.get("Content-Type"),
+        "application/vnd.api+json",
+    );
+    const checkKeys = (value) => {
+        if (!value || typeof value !== "object") return;
+        for (const [key, child] of Object.entries(value)) {
+            assert.ok(
+                !["title", "image", "schemaVersion", "description"].includes(
+                    key,
+                ),
+                key,
+            );
+            assert.ok(!key.includes("-"), key);
+            checkKeys(child);
+        }
+    };
+    checkKeys(body);
+});
+
+test("JSON API errors use errors arrays with safe string status codes", async () => {
+    const response = await fetchWorker("/v1?product=999");
+    assert.equal(response.status, 400);
+    assert.equal(
+        response.headers.get("Content-Type"),
+        "application/vnd.api+json",
+    );
+    const body = await response.json();
+    assert.equal(body.data, undefined);
+    assert.equal(body.errors[0].status, "400");
+    assert.equal(body.errors[0].code, "invalid_query");
+    assert.equal(typeof body.errors[0].detail, "string");
+    assert.equal(body.errors[0].title, undefined);
+    assert.equal(requests.length, 0);
+});
+
+test("JSON API content negotiation rejects unsupported media parameters before cache access", async () => {
+    const valid = await fetchWorker("/v1", {
+        headers: { Accept: "application/vnd.api+json" },
+    });
+    assert.equal(valid.status, 200);
+    assert.equal(valid.headers.get("Vary"), "Accept");
+    await valid.text();
+    const count = requests.length;
+    for (const [headers, status] of [
+        [{ Accept: "application/vnd.api+json; charset=utf-8" }, 406],
+        [
+            {
+                Accept: 'application/vnd.api+json; ext="https://example.com/unknown"',
+            },
+            406,
+        ],
+        [{ Accept: "application/vnd.api+json;q=0, */*;q=1" }, 406],
+        [{ Accept: "application/*;q=0, */*;q=1" }, 406],
+        [{ Accept: "*/*;q=1, application/*;q=0" }, 406],
+        [{ Accept: "application/json" }, 406],
+        [{ "Content-Type": "application/vnd.api+json; charset=utf-8" }, 415],
+        [
+            {
+                "Content-Type":
+                    'application/vnd.api+json; ext="https://example.com/unknown"',
+            },
+            415,
+        ],
+    ]) {
+        const response = await fetchWorker("/v1", { headers });
+        assert.equal(response.status, status, JSON.stringify(headers));
+        assert.equal((await response.json()).errors[0].status, String(status));
+        assert.equal(response.headers.get("Cache-Control"), "no-store");
+    }
+    assert.equal(requests.length, count);
+    for (const Accept of [
+        "*/*",
+        "application/*",
+        'application/vnd.api+json;profile="https://example.com/profile,a;b"',
+        'application/vnd.api+json;ext="https://example.com/unknown", application/vnd.api+json;q=0.9',
+        "application/vnd.api+json;charset=utf-8, application/vnd.api+json",
+    ]) {
+        const response = await fetchWorker("/v1", { headers: { Accept } });
+        assert.equal(response.status, 200, Accept);
+        await response.text();
+    }
+});
+
+test("JSON API IDs are stable across filters and rebranding and distinguish fuel products", async () => {
+    const first = (await (await fetchWorker("/v1?product=1,2")).json()).data;
+    assert.equal(first.length, 2);
+    assert.notEqual(first[0].id, first[1].id);
+    origin = () =>
+        new Response(
+            xml()
+                .replace("Example Station", "New Name")
+                .replace("185.9", "199.9"),
+        );
+    const renamed = (
+        await (
+            await fetchWorker("/v1?filter[product]=1&filter[brand]=2")
+        ).json()
+    ).data;
+    assert.equal(renamed[0].id, first[0].id);
+    assert.equal(renamed[0].attributes.price.perLitre, 199.9);
 });
 
 test("unknown paths and unsupported methods do not contact upstream", async () => {
@@ -264,8 +378,8 @@ test("valid empty snapshots have a short explicit cache lifetime", async () => {
     const response = await fetchWorker("/v1");
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(body.publicationStatus, "empty");
-    assert.deepEqual(body.feed.items, []);
+    assert.equal(body.meta.publicationStatus, "empty");
+    assert.deepEqual(body.data, []);
     const ttl = Number(
         /s-maxage=(\d+)/.exec(response.headers.get("Cache-Control"))?.[1] ?? 0,
     );
@@ -409,10 +523,10 @@ test("case-insensitive lists combine brands and products without mixing fuel pri
     );
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(body.product, undefined);
-    assert.deepEqual(body.products, [1, 2, 6]);
+    assert.equal(body.meta.product, undefined);
+    assert.deepEqual(body.meta.products, [1, 2, 6]);
     assert.deepEqual(
-        body.feed.items.map((item) => [
+        body.data.map(({ attributes: item }) => [
             item.product,
             item.brand,
             item.price.perLitre,
@@ -449,15 +563,15 @@ test("overlapping region and suburb lists deduplicate stations per fuel product"
     const body = await response.json();
     assert.equal(requests.length, 8);
     assert.deepEqual(
-        body.feed.items.map((item) => item.product),
+        body.data.map((item) => item.attributes.product),
         [1, 2],
     );
     const single = await fetchWorker("/v1?product=1,1&brand=2,35");
     const singleBody = await single.json();
-    assert.equal(singleBody.product, 1);
-    assert.equal(singleBody.products, undefined);
-    assert.equal(singleBody.feed.items.length, 1);
-    assert.equal(singleBody.feed.items[0].product, undefined);
+    assert.equal(singleBody.meta.product, 1);
+    assert.equal(singleBody.meta.products, undefined);
+    assert.equal(singleBody.data.length, 1);
+    assert.equal(singleBody.data[0].attributes.product, 1);
 });
 
 test("a failed component never produces or caches a partial combined snapshot", async () => {
@@ -471,11 +585,11 @@ test("a failed component never produces or caches a partial combined snapshot", 
     const first = await fetchWorker("/v1?product=1,2");
     assert.equal(first.status, 502);
     assert.equal(first.headers.get("Cache-Control"), "no-store");
-    assert.equal((await first.json()).error.code, "invalid_feed");
+    assert.equal((await first.json()).errors[0].code, "invalid_feed");
     broken = false;
     const retry = await fetchWorker("/v1?PRODUCT=2,1");
     assert.equal(retry.status, 200);
-    assert.equal((await retry.json()).feed.items.length, 2);
+    assert.equal((await retry.json()).data.length, 2);
     assert.equal(retry.headers.get("X-FuelWatch-Cache"), "MISS");
 });
 
@@ -491,7 +605,7 @@ test("conflicting prices across overlapping filters fail the complete response",
         );
     const response = await fetchWorker("/v1?region=25,26");
     assert.equal(response.status, 502);
-    assert.equal((await response.json()).error.code, "invalid_feed");
+    assert.equal((await response.json()).errors[0].code, "invalid_feed");
 });
 
 test("legacy supports product lists and keeps its cache separate from v1", async () => {
@@ -508,5 +622,8 @@ test("legacy supports product lists and keeps its cache separate from v1", async
         ],
     );
     const compact = await fetchWorker("/v1?product=1,2");
-    assert.equal((await compact.json()).feed.items[0].price.perLitre, 185.9);
+    assert.equal(
+        (await compact.json()).data[0].attributes.price.perLitre,
+        185.9,
+    );
 });

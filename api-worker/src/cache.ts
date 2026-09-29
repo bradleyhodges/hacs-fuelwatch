@@ -43,7 +43,7 @@ export function cacheTtl(info: FeedMetadata, now: number): number {
 /** Cache identity contains no client headers, ignored filters or relative dates. */
 export function cacheKey(request: URL, query: FeedQuery): Request {
     const url = new URL(
-        `/__fuelwatch_cache/stations-v3/${request.pathname === "/legacy" ? "legacy" : "compact"}`,
+        `/__fuelwatch_cache/jsonapi-v1/${request.pathname === "/legacy" ? "legacy" : "compact"}`,
         request.origin,
     );
     url.search = query.canonical.toString();

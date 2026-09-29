@@ -1,9 +1,6 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js";
-import type {
-    FuelWatchProductId,
-    FuelWatchRssFeed,
-    FuelWatchRssItem,
-} from "./fuelwatch";
+import type { FuelWatchRssFeed, FuelWatchRssItem } from "./fuelwatch";
+import { perthTimestamp } from "./query";
 
 /** Canonical feature labels. Add aliases deliberately; never emit arbitrary source text here. */
 export const FEATURES = [
@@ -31,7 +28,7 @@ export const FEATURES = [
 ] as const;
 /** A stable, human-readable feature identifier, suitable for exact client-side comparisons. */
 export type Feature = (typeof FEATURES)[number];
-/** Restrictions observed in FuelWatch. Unknown conditions remain in source-notes. */
+/** Restrictions observed in FuelWatch. Unknown conditions remain in sourceNotes. */
 export const RESTRICTIONS = [
     "Unmanned site (credit card charges may apply)",
     "Entry Permit Required",
@@ -57,7 +54,7 @@ export type OpeningHours = Partial<Record<Weekday, string>>;
 export interface SourceNotes {
     features?: string[];
     restrictions?: string[];
-    "open-hours"?: string;
+    openHours?: string;
     phone?: string;
 }
 
@@ -75,12 +72,10 @@ export interface StationEnrichment {
     attributions: { displayName: string; uri: string }[];
 }
 
-/** Public /v1 station contract. Missing information is null/omitted, never guessed from examples. */
+/** Station attributes within a JSON:API fuel-price resource. Missing values are never guessed. */
 export interface Station {
-    /** Present in multi-product responses so this quote's fuel type is unambiguous. */
-    product?: FuelWatchProductId;
     name: string;
-    "trading-name": string;
+    tradingName: string;
     brand: string;
     price: {
         /** Australian cents per litre; 195 means AUD 1.95/L. */
@@ -99,10 +94,10 @@ export interface Station {
     phone: string | null;
     latitude: number;
     longitude: number;
-    "site-features": Feature[];
-    "open-hours"?: OpeningHours;
+    siteFeatures: Feature[];
+    openHours?: OpeningHours;
     restrictions: Restriction[] | null;
-    "source-notes"?: SourceNotes;
+    sourceNotes?: SourceNotes;
     /** Present only when Google fields were actually used; clients must display their attribution. */
     enrichment?: {
         provider: "Google Maps";
@@ -261,7 +256,7 @@ function parseFeatures(raw: string): {
  * @param extra Verified Google data for this exact FuelWatch station identity.
  * @param now Wall-clock milliseconds, injectable to test freshness without real timers.
  * @remarks FuelWatch street, suburb, name, brand, price and coordinates always win. Explicit source
- * phone/hours, including unparseable values retained in source-notes, block provider replacements.
+ * phone/hours, including unparseable values retained in sourceNotes, block provider replacements.
  */
 export function normaliseStation(
     item: FuelWatchRssItem,
@@ -293,7 +288,7 @@ export function normaliseStation(
         }
     }
     if (facilities.unknown.length) notes.features = facilities.unknown;
-    if (parsed.unparsed) notes["open-hours"] = parsed.unparsed;
+    if (parsed.unparsed) notes.openHours = parsed.unparsed;
     // FuelWatch uses this sentinel as an absent value, not as an explicit phone number.
     const sourcePhone = item.phone?.trim() === "--EMPTY--" ? null : item.phone;
     const phone = normalisePhone(sourcePhone);
@@ -302,11 +297,12 @@ export function normaliseStation(
     if (parsed.is24Hours) features.add("Open 24 hours");
     const result: Station = {
         name: item["trading-name"],
-        "trading-name": item["trading-name"],
+        tradingName: item["trading-name"],
         brand: item.brand,
         price: {
             perLitre: Number(item.price),
-            asAt: `${item.date}T00:00:00.000+08:00`,
+            // Set the "asAt" time to 6AM (see: https://www.consumerprotection.wa.gov.au/fuelwatch-and-fuel-prices)
+            asAt: `${item.date}T06:00:00.000+08:00`,
         },
         address: {
             street: item.address,
@@ -318,7 +314,7 @@ export function normaliseStation(
         phone,
         latitude: Number(item.latitude),
         longitude: Number(item.longitude),
-        "site-features": [],
+        siteFeatures: [],
         restrictions: restrictions.size
             ? RESTRICTIONS.filter((value) => restrictions.has(value))
             : null,
@@ -343,7 +339,7 @@ export function normaliseStation(
             if (feature === "Open 24 hours" && sourceHours) continue;
             if (!features.has(feature)) {
                 features.add(feature);
-                fields.push("site-features");
+                fields.push("siteFeatures");
             }
         }
         // A malformed source schedule is still a supplied schedule; don't silently contradict it.
@@ -354,7 +350,7 @@ export function normaliseStation(
                     extra.is24Hours === true ? "00:00-24:00" : extra.hours[day];
                 if (hours[day] === undefined && providerHours !== undefined) {
                     hours[day] = providerHours;
-                    fields.push(`open-hours.${day}`);
+                    fields.push(`openHours.${day}`);
                 }
             }
             if (result.is24Hours === null) {
@@ -379,16 +375,16 @@ export function normaliseStation(
             result.enrichment = {
                 provider: "Google Maps",
                 placeId: extra.placeId,
-                fetchedAt: extra.fetchedAt,
+                fetchedAt: perthTimestamp(Date.parse(extra.fetchedAt)),
                 stale: now >= Date.parse(extra.expiresAt),
                 fields: [...new Set(fields)],
                 googleMapsUri: extra.googleMapsUri,
                 attributions: extra.attributions,
             };
     }
-    result["site-features"] = FEATURES.filter((value) => features.has(value));
+    result.siteFeatures = FEATURES.filter((value) => features.has(value));
     if (Object.keys(hours).length && result.is24Hours !== true)
-        result["open-hours"] = hours;
-    if (Object.keys(notes).length) result["source-notes"] = notes;
+        result.openHours = hours;
+    if (Object.keys(notes).length) result.sourceNotes = notes;
     return result;
 }

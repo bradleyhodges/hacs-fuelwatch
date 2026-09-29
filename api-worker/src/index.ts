@@ -9,9 +9,15 @@ import { readEnrichments, refreshEnrichment } from "./enrichment";
 import { ApiError } from "./errors";
 import { metadata } from "./feed";
 import { ALLOWED_METHODS, corsHeaders, handleOptions } from "./httpOptions";
+import {
+    JSON_API_MEDIA_TYPE,
+    jsonApiDocument,
+    jsonApiError,
+    validateJsonApiHeaders,
+} from "./jsonapi";
 import { parseQuery } from "./query";
 import { loadSnapshot } from "./snapshot";
-import { normalisePhone, normaliseStation, stationKey } from "./station";
+import { normalisePhone } from "./station";
 
 /** Apply conditional/HEAD semantics and expose only the remaining shared-cache lifetime. */
 function deliver(
@@ -59,6 +65,7 @@ export default {
         ctx: ExecutionContext,
     ): Promise<Response> {
         const started = Date.now();
+        const legacy = new URL(request.url).pathname === "/legacy";
         try {
             const url = new URL(request.url);
             if (
@@ -87,6 +94,7 @@ export default {
                     },
                 });
             }
+            if (!legacy) validateJsonApiHeaders(request.headers);
             const query = parseQuery(url.searchParams, started);
             const key = cacheKey(url, query);
             const cached = await readCache(caches.default, key, started);
@@ -112,22 +120,7 @@ export default {
             );
             const body = JSON.stringify(
                 url.pathname === "/v1"
-                    ? {
-                          ...info,
-                          feed: {
-                              ...feed,
-                              items: feed.items.map((item) => ({
-                                  ...normaliseStation(
-                                      item,
-                                      enrichment?.get(stationKey(item)),
-                                      now,
-                                  ),
-                                  ...(multipleProducts
-                                      ? { product: item.product }
-                                      : {}),
-                              })),
-                          },
-                      }
+                    ? await jsonApiDocument(feed, info, enrichment, now)
                     : {
                           feed: {
                               ...feed,
@@ -147,7 +140,10 @@ export default {
             const response = new Response(body, {
                 headers: {
                     ...corsHeaders,
-                    "Content-Type": "application/json;charset=UTF-8",
+                    "Content-Type": legacy
+                        ? "application/json;charset=UTF-8"
+                        : JSON_API_MEDIA_TYPE,
+                    ...(!legacy ? { Vary: "Accept" } : {}),
                     "X-Content-Type-Options": "nosniff",
                     "Cache-Control":
                         ttl > 0
@@ -191,7 +187,10 @@ export default {
             });
             const headers = new Headers({
                 ...corsHeaders,
-                "Content-Type": "application/json;charset=UTF-8",
+                "Content-Type": legacy
+                    ? "application/json;charset=UTF-8"
+                    : JSON_API_MEDIA_TYPE,
+                ...(!legacy ? { Vary: "Accept" } : {}),
                 "Cache-Control": "no-store",
             });
             if (failure.status === 405) headers.set("Allow", ALLOWED_METHODS);
@@ -200,12 +199,16 @@ export default {
             return new Response(
                 request.method === "HEAD"
                     ? null
-                    : JSON.stringify({
-                          error: {
-                              code: failure.code,
-                              message: failure.message,
-                          },
-                      }),
+                    : JSON.stringify(
+                          legacy
+                              ? {
+                                    error: {
+                                        code: failure.code,
+                                        message: failure.message,
+                                    },
+                                }
+                              : jsonApiError(failure),
+                      ),
                 { status: failure.status, headers },
             );
         }

@@ -7,6 +7,8 @@ export type ErrorCode =
     | "upstream_timeout"
     | "not_found"
     | "method_not_allowed"
+    | "unsupported_media_type"
+    | "not_acceptable"
     | "internal_error";
 
 /** Safe public errors never contain upstream bodies, URLs or exception details. */

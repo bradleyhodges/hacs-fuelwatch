@@ -22,6 +22,9 @@ export interface FeedQuery {
 /** Perth has no daylight saving; arithmetic never uses the host timezone. */
 export const perthDate = (now: number): string =>
     new Date(now + PERTH_OFFSET_MS).toISOString().slice(0, 10);
+/** ISO 8601 timestamp in AWST; fixed offset avoids dependence on the deployment/host timezone. */
+export const perthTimestamp = (now: number): string =>
+    new Date(now + PERTH_OFFSET_MS).toISOString().replace("Z", "+08:00");
 export const shiftDate = (date: string, days: number): string =>
     new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS)
         .toISOString()
@@ -49,8 +52,11 @@ export function parseQuery(params: URLSearchParams, now: number): FeedQuery {
         invalid();
     const normalized = new URLSearchParams();
     for (const [name, value] of params) {
+        // JSON:API reserves the filter family for application-defined filtering semantics.
+        // Short names remain intentional compatibility aliases and normalize to the same key.
+        const filterName = /^filter\[([a-z]+)\]$/i.exec(name)?.[1] ?? name;
         const canonicalName = FUELWATCH_QUERY_PARAMETERS.find(
-            (key) => key.toLowerCase() === name.toLowerCase(),
+            (key) => key.toLowerCase() === filterName.toLowerCase(),
         );
         if (
             !canonicalName ||

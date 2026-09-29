@@ -7,14 +7,13 @@ import {
     type FuelWatchRssItem,
     normaliseFuelWatchItem,
 } from "./fuelwatch";
-import { type FeedQuery, perthDate, shiftDate } from "./query";
+import { type FeedQuery, perthDate, perthTimestamp, shiftDate } from "./query";
 import { normaliseStation, type StationFeed } from "./station";
 
 export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_STATIONS = 5000;
 /** Snapshot provenance retained across station DTO changes so consumers can reject stale/wrong-day prices. */
 interface SnapshotMetadata {
-    schemaVersion: 1;
     sourceDate: string;
     fetchedAt: string;
     validFrom: string;
@@ -28,11 +27,6 @@ export type FeedMetadata = SnapshotMetadata &
         | { product: FuelWatchProductId; products?: never }
         | { products: FuelWatchProductId[]; product?: never }
     );
-
-/** Public /v1 response: source metadata plus normalized stations under feed.items. */
-export type StationResponse = FeedMetadata & {
-    feed: StationFeed;
-};
 
 const record = (value: unknown): Record<string, unknown> => {
     if (!value || typeof value !== "object" || Array.isArray(value))
@@ -214,16 +208,13 @@ export function metadata(
     const beforePublication =
         local.getUTCHours() * 60 + local.getUTCMinutes() < 14 * 60 + 30;
     return {
-        schemaVersion: 1,
         ...(query.products.length === 1
             ? { product: query.products[0] }
             : { products: query.products }),
         sourceDate: query.sourceDate,
-        fetchedAt: new Date(now).toISOString(),
-        validFrom: new Date(`${query.sourceDate}T06:00:00+08:00`).toISOString(),
-        validUntil: new Date(
-            `${shiftDate(query.sourceDate, 1)}T06:00:00+08:00`,
-        ).toISOString(),
+        fetchedAt: perthTimestamp(now),
+        validFrom: `${query.sourceDate}T06:00:00.000+08:00`,
+        validUntil: `${shiftDate(query.sourceDate, 1)}T06:00:00.000+08:00`,
         publicationStatus:
             count > 0
                 ? "available"

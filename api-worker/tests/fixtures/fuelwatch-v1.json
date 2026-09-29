@@ -1,22 +1,26 @@
 {
-    "schemaVersion": 1,
-    "product": 1,
-    "sourceDate": "2026-09-29",
-    "fetchedAt": "2026-09-29T08:00:00.000Z",
-    "validFrom": "2026-09-28T22:00:00.000Z",
-    "validUntil": "2026-09-29T22:00:00.000Z",
-    "publicationStatus": "available",
-    "feed": {
-        "title": "FuelWatch",
-        "items": [
-            {
+    "jsonapi": {
+        "version": "1.1"
+    },
+    "meta": {
+        "product": 1,
+        "sourceDate": "2026-09-29",
+        "fetchedAt": "2026-09-29T16:00:00.000+08:00",
+        "validFrom": "2026-09-29T06:00:00.000+08:00",
+        "validUntil": "2026-09-30T06:00:00.000+08:00",
+        "publicationStatus": "available"
+    },
+    "data": [
+        {
+            "type": "fuelPrices",
+            "id": "2026-09-29:1:238232d151f5f92bbce32951b828cb7fe4887fdc1ac868628c7ab33d4eda4e3b",
+            "attributes": {
                 "name": "Example Station",
                 "brand": "Example",
                 "price": {
                     "perLitre": 185.9,
                     "asAt": "2026-09-29T00:00:00.000+08:00"
                 },
-                "trading-name": "Example Station",
                 "address": {
                     "street": "1 Test Road",
                     "suburb": "PERTH",
@@ -27,9 +31,11 @@
                 "latitude": -31.95,
                 "longitude": 115.86,
                 "is24Hours": null,
-                "site-features": [],
-                "restrictions": null
+                "restrictions": null,
+                "tradingName": "Example Station",
+                "siteFeatures": [],
+                "product": 1
             }
-        ]
-    }
+        }
+    ]
 }

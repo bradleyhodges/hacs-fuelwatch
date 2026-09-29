@@ -1,4 +1,4 @@
-"""Asynchronous adapter for the versioned FuelWatch worker JSON API."""
+"""Asynchronous adapter for the FuelWatch worker's JSON:API price resources."""
 
 import asyncio
 import json
@@ -57,34 +57,48 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
         document = json.loads(payload, object_pairs_hook=_unique_object, parse_float=Decimal)
         if not isinstance(document, dict):
             raise ValueError("Expected a JSON object")
-        if type(document.get("schemaVersion")) is not int or document["schemaVersion"] != 1:
-            raise ValueError("Unsupported API schema")
-        if type(document.get("product")) is not int or document["product"] != int(product):
+        if "errors" in document:
+            raise ValueError("Upstream returned an error document")
+        metadata = document.get("meta")
+        if not isinstance(metadata, dict):
+            raise ValueError("Expected snapshot metadata")
+        if type(metadata.get("product")) is not int or metadata["product"] != int(product):
             raise ValueError("Unexpected product")
-        if document.get("sourceDate") != expected_date.isoformat():
+        if metadata.get("sourceDate") != expected_date.isoformat():
             raise ValueError("Unexpected snapshot date")
         valid_from = datetime.combine(expected_date, time(6), PERTH)
-        if (
-            _timestamp(document.get("validFrom")) != valid_from
-            or _timestamp(document.get("validUntil")) != valid_from + timedelta(days=1)
-        ):
+        if _timestamp(metadata.get("validFrom")) != valid_from or _timestamp(
+            metadata.get("validUntil")
+        ) != valid_from + timedelta(days=1):
             raise ValueError("Unexpected price validity window")
-        _timestamp(document.get("fetchedAt"))
-        channel = document.get("feed")
-        if not isinstance(channel, dict):
-            raise ValueError("Expected a feed object")
-        items = channel.get("items")
+        _timestamp(metadata.get("fetchedAt"))
+        items = document.get("data")
         if not isinstance(items, list) or len(items) > MAX_STATIONS:
             raise ValueError("Invalid station list")
-        status = document.get("publicationStatus")
+        status = metadata.get("publicationStatus")
         if (items and status != "available") or (
             not items and status not in ("empty", "not_yet_published")
         ):
             raise ValueError("Inconsistent publication status")
         quotes = {}
-        for item in items:
+        resource_ids: set[str] = set()
+        for resource in items:
+            if not isinstance(resource, dict) or resource.get("type") != "fuelPrices":
+                raise ValueError("Invalid price resource")
+            resource_id = resource.get("id")
+            if (
+                not isinstance(resource_id, str)
+                or not resource_id.strip()
+                or len(resource_id) > 200
+                or resource_id in resource_ids
+            ):
+                raise ValueError("Invalid or duplicate resource identity")
+            resource_ids.add(resource_id)
+            item = resource.get("attributes")
             if not isinstance(item, dict):
-                raise ValueError("Invalid station record")
+                raise ValueError("Expected resource attributes")
+            if type(item.get("product")) is not int or item["product"] != int(product):
+                raise ValueError("Unexpected quote product")
 
             def field(name: str, required: bool = True, source: dict | None = None) -> str:
                 value = (item if source is None else source).get(name, "")
@@ -107,7 +121,10 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
                     raise ValueError("Expected a JSON number")
             latitude = float(decimal(item["latitude"], minimum=-90, maximum=90))
             longitude = float(decimal(item["longitude"], minimum=-180, maximum=180))
-            address, suburb = field("street", source=address_fields), field("suburb", source=address_fields)
+            address, suburb = (
+                field("street", source=address_fields),
+                field("suburb", source=address_fields),
+            )
             if address_fields.get("state") != "WA":
                 raise ValueError("Unexpected address state")
             # Neighbouring sites can share an address in the real feed. Include
@@ -190,10 +207,13 @@ class FuelWatchClient:
                 try:
                     async with self.session.get(
                         FEED_URL,
-                        params={"Product": product, "Day": day.strftime("%d/%m/%Y")},
+                        params={
+                            "filter[product]": product,
+                            "filter[day]": day.strftime("%d/%m/%Y"),
+                        },
                         timeout=aiohttp.ClientTimeout(total=25),
                         headers={
-                            "Accept": "application/json",
+                            "Accept": "application/vnd.api+json",
                             "User-Agent": "FuelWatch-WA-Plus/0.1 HomeAssistant",
                         },
                         allow_redirects=False,
