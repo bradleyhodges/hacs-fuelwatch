@@ -17,7 +17,7 @@ def feed(price=185.9, day="2026-09-29", brand="Test"):
     fixture = Path(__file__).parents[1] / "api-worker/tests/fixtures/fuelwatch-v1.json"
     data = json.loads(fixture.read_text())
     data["data"][0]["attributes"].update(
-        {"price": {"perLitre": price, "asAt": f"{day}T00:00:00.000+08:00"}, "brand": brand}
+        {"price": {"perLitre": price, "asAt": f"{day}T06:00:00.000+08:00"}, "brand": brand}
     )
     return json.dumps(data).encode()
 
@@ -33,7 +33,7 @@ def change(**values):
 
 
 def first_price(value):
-    return {"perLitre": value, "asAt": "2026-09-29T00:00:00.000+08:00"}
+    return {"perLitre": value, "asAt": "2026-09-29T06:00:00.000+08:00"}
 
 
 def test_parse_quote_and_brand_independent_identity():
@@ -67,7 +67,7 @@ def test_parse_quote_and_brand_independent_identity():
         feed(price=True),
         feed(price={"value": "185.9"}),
         feed().replace(b'"perLitre": 185.9', b'"perLitre": 185.9, "perLitre": 100'),
-        feed().replace(b"T00:00:00.000+08:00", b"T00:00:00.000Z"),
+        feed().replace(b"T06:00:00.000+08:00", b"T00:00:00.000Z"),
         feed().replace(b'"latitude": -31.95', b'"latitude": "-31.95"'),
         feed().replace(b'"state": "WA"', b'"state": "NSW"'),
     ],

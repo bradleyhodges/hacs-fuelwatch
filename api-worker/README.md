@@ -55,7 +55,7 @@ curl 'https://fuelwatch.oss.bhodges.me/v1?brand=2,35&product=1,2,6&day=TODAY'
 
 `/v1` responds with `Content-Type: application/vnd.api+json` without a charset parameter. Send that type in `Accept`, or omit `Accept`/use a compatible wildcard. Unsupported extension/media parameters yield 406 (`Accept`) or 415 (`Content-Type`) before any cache read. Unknown profiles are ignored. `Vary: Accept` is included; HEAD and conditional requests obey the same negotiation rules.
 
-The document has three top-level members: `jsonapi: {"version":"1.1"}`, `meta` and `data`. `meta` retains `sourceDate`, `fetchedAt`, `validFrom`, `validUntil` and `publicationStatus`. A single fuel has numeric `meta.product`; multiple fuels have `meta.products: [1, 2, 6]`. Every resource is `{ "type": "fuelPrices", "id": "...", "attributes": { ... } }`, with a numeric `attributes.product` even for single-product requests. A station selling three requested fuels appears once per station/product pair. Resource IDs combine source date, product and a SHA-256 hash of FuelWatch station identity; rebranding, price corrections and enrichment updates retain the ID. There are no advertised resource URLs that the worker cannot serve.
+The document has three top-level members: `jsonapi: {"version":"1.1"}`, `meta` and `data`. `meta.source` identifies the original fuel-price publisher as `fuelwatch.wa.gov.au`. `meta` also retains `sourceDate`, `fetchedAt`, `validFrom`, `validUntil` and `publicationStatus`. A single fuel has numeric `meta.product`; multiple fuels have `meta.products: [1, 2, 6]`. Every resource is `{ "type": "fuelPrices", "id": "...", "attributes": { ... } }`, with a numeric `attributes.product` even for single-product requests. A station selling three requested fuels appears once per station/product pair. Resource IDs combine source date, product and a SHA-256 hash of FuelWatch station identity; rebranding, price corrections and enrichment updates retain the ID. There are no advertised resource URLs that the worker cannot serve.
 
 RSS `title`, `image`, `description`, parser fields and the old `schemaVersion` are absent from `/v1`. Station attributes use camelCase, including `tradingName`, `siteFeatures`, `openHours` and `sourceNotes`. Enrichment field paths use these same names.
 
@@ -75,6 +75,7 @@ Example document:
         "version": "1.1"
     },
     "meta": {
+        "source": "fuelwatch.wa.gov.au",
         "product": 1,
         "sourceDate": "2026-09-29",
         "fetchedAt": "2026-09-29T16:00:00.000+08:00",
@@ -91,7 +92,7 @@ Example document:
                 "brand": "Example",
                 "price": {
                     "perLitre": 185.9,
-                    "asAt": "2026-09-29T00:00:00.000+08:00"
+                    "asAt": "2026-09-29T06:00:00.000+08:00"
                 },
                 "address": {
                     "street": "1 Test Road",
@@ -113,7 +114,7 @@ Example document:
 }
 ```
 
-`price.perLitre` is a JSON **number in Australian cents per litre** (185.9 means AUD 1.859/L). `price.asAt` is the source date at Perth midnight, not the price period's 06:00 start and not a retrieval timestamp. Consumers needing decimal arithmetic should parse JSON numbers as decimals, as the Python adapter does. Coordinates are numbers; postcodes stay strings. Google never changes FuelWatch prices, coordinates, names, brands, streets or suburbs. Missing postcodes are `null` until a confident place match supplies one; example data is never used as a lookup database.
+`price.perLitre` is a JSON **number in Australian cents per litre** (185.9 means AUD 1.859/L). `price.asAt` is the start of the source price period at 06:00 AWST, matching `meta.validFrom`; it is not a retrieval timestamp. Consumers needing decimal arithmetic should parse JSON numbers as decimals, as the Python adapter does. Coordinates are numbers; postcodes stay strings. Google never changes FuelWatch prices, coordinates, names, brands, streets or suburbs. Missing postcodes are `null` until a confident place match supplies one; example data is never used as a lookup database.
 
 Phone parsing uses `libphonenumber-js` with the Australian default region, strict whole-value parsing and validity checks. Invalid/ambiguous numbers produce `phone: null` and retain the original text in `sourceNotes.phone`; an explicitly supplied invalid number blocks Google replacement. Empty fields and FuelWatch's `--EMPTY--` marker permit a fallback. Extensions and lists of numbers are not silently discarded to invent a canonical number.
 

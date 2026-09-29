@@ -3,6 +3,7 @@
         "version": "1.1"
     },
     "meta": {
+        "source": "fuelwatch.wa.gov.au",
         "product": 1,
         "sourceDate": "2026-09-29",
         "fetchedAt": "2026-09-29T16:00:00.000+08:00",
@@ -19,7 +20,7 @@
                 "brand": "Example",
                 "price": {
                     "perLitre": 185.9,
-                    "asAt": "2026-09-29T00:00:00.000+08:00"
+                    "asAt": "2026-09-29T06:00:00.000+08:00"
                 },
                 "address": {
                     "street": "1 Test Road",

@@ -58,13 +58,16 @@ test("response freshness stops at provider refresh and hard age boundaries", () 
     assert.equal(api.enrichmentTtl([], now), Infinity);
 });
 
-const example = JSON.parse(
-    await readFile(new URL("../example.json", import.meta.url), "utf8"),
+const rawStation = JSON.parse(
+    await readFile(
+        new URL("./fixtures/fuelwatch-rss-item.json", import.meta.url),
+        "utf8",
+    ),
 );
 const station = (overrides = {}) =>
     api.compactFeed({
         title: "FuelWatch",
-        items: [{ ...example.before.feed.items[0], ...overrides }],
+        items: [{ ...rawStation, ...overrides }],
     }).items[0];
 
 test("station JSON has structured cents-per-litre price, Perth source date and numeric coordinates", () => {
@@ -73,7 +76,7 @@ test("station JSON has structured cents-per-litre price, Perth source date and n
     assert.equal(result.tradingName, result.name);
     assert.deepEqual(result.price, {
         perLitre: 195,
-        asAt: "2026-09-29T00:00:00.000+08:00",
+        asAt: "2026-09-29T06:00:00.000+08:00",
     });
     assert.deepEqual(result.address, {
         street: "Lot 2 North West Coastal Hwy",

@@ -165,7 +165,7 @@ test("versioned JSON excludes redundant descriptions and exposes provenance", as
     assert.equal(attributes.contentSnippet, undefined);
     assert.equal(attributes.description, undefined);
     assert.equal(attributes.price.perLitre, 185.9);
-    assert.equal(attributes.price.asAt, `${perthDate()}T00:00:00.000+08:00`);
+    assert.equal(attributes.price.asAt, `${perthDate()}T06:00:00.000+08:00`);
     assert.equal(attributes.address.suburb, "PERTH");
     assert.ok(
         body.meta.fetchedAt && body.meta.validFrom && body.meta.validUntil,

@@ -80,7 +80,7 @@ export interface Station {
     price: {
         /** Australian cents per litre; 195 means AUD 1.95/L. */
         perLitre: number;
-        /** FuelWatch source date at Perth midnight, distinct from the envelope's 06:00 validFrom. */
+        /** Start of the FuelWatch price period at 06:00 AWST, matching meta.validFrom. */
         asAt: string;
     };
     address: {

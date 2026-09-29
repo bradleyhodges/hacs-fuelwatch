@@ -14,6 +14,8 @@ export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_STATIONS = 5000;
 /** Snapshot provenance retained across station DTO changes so consumers can reject stale/wrong-day prices. */
 interface SnapshotMetadata {
+    /** Original fuel-price publisher; enrichment attribution remains on individual resources. */
+    source: "fuelwatch.wa.gov.au";
     sourceDate: string;
     fetchedAt: string;
     validFrom: string;
@@ -208,6 +210,7 @@ export function metadata(
     const beforePublication =
         local.getUTCHours() * 60 + local.getUTCMinutes() < 14 * 60 + 30;
     return {
+        source: "fuelwatch.wa.gov.au",
         ...(query.products.length === 1
             ? { product: query.products[0] }
             : { products: query.products }),

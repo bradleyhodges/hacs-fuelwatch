@@ -114,7 +114,7 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
             if not isinstance(price, dict) or not isinstance(address_fields, dict):
                 raise ValueError("Expected structured price and address")
             as_at = _timestamp(price.get("asAt"))
-            if as_at != datetime.combine(expected_date, time(), PERTH):
+            if as_at != valid_from:
                 raise ValueError("Unexpected quote date")
             for value in (item.get("latitude"), item.get("longitude"), price.get("perLitre")):
                 if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
