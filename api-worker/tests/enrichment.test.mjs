@@ -379,3 +379,59 @@ test("slow D1 reads are bounded and stop subsequent batches", async () => {
     assert.equal(calls, 1);
     assert.ok(Date.now() - started < 3000);
 });
+
+test("refresh summaries distinguish saved matches from unmatched stations and pending backlog", async (context) => {
+    const log = context.mock.method(console, "log", () => {});
+    await api.refreshEnrichment(env, { now, fetcher });
+    let summary = log.mock.calls.at(-1).arguments[0];
+    assert.equal(summary.matched, 1);
+    assert.equal(summary.unmatched, 0);
+    assert.equal(summary.requestsReserved, 1);
+    assert.deepEqual(summary.cache, { stations: 1, enriched: 1, pending: 0 });
+    await db
+        .prepare(
+            "UPDATE station_enrichment SET next_attempt_at = 0, place_id = NULL, enrichment_json = NULL",
+        )
+        .run();
+    await api.refreshEnrichment(env, {
+        now: now + 60_000,
+        fetcher: async (url) =>
+            url.hostname === "source.example"
+                ? new Response(xml)
+                : Response.json({}),
+    });
+    summary = log.mock.calls.at(-1).arguments[0];
+    assert.equal(summary.matched, 0);
+    assert.equal(summary.unmatched, 1);
+    assert.equal(summary.requestsReserved, 2);
+    assert.equal(summary.failed, 0);
+    assert.deepEqual(summary.cache, { stations: 1, enriched: 0, pending: 0 });
+});
+
+test("losing the lease cannot be logged as a saved enrichment", async (context) => {
+    const log = context.mock.method(console, "log", () => {});
+    await api.refreshEnrichment(env, {
+        now,
+        fetcher: async (url) => {
+            if (url.hostname === "source.example") return new Response(xml);
+            await db
+                .prepare(
+                    "UPDATE enrichment_refresh SET owner = 'successor' WHERE id = 1",
+                )
+                .run();
+            return Response.json({ places: [google] });
+        },
+    });
+    const summary = log.mock.calls.at(-1).arguments[0];
+    assert.equal(summary.matched, 0);
+    assert.equal(summary.writeSkipped, 1);
+    assert.equal(summary.stopReason, "lease_lost");
+    assert.equal(
+        (
+            await db
+                .prepare("SELECT enrichment_json FROM station_enrichment")
+                .first()
+        ).enrichment_json,
+        null,
+    );
+});

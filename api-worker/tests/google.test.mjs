@@ -92,7 +92,12 @@ test("stored place IDs use Details and are still matched to the station", async 
 
 test("wrong, distant, closed and ambiguous places are not used", async () => {
     for (const places of [
-        [place({ displayName: { text: "Different business" } })],
+        [
+            place({
+                displayName: { text: "Different business" },
+                location: { latitude: -31.951, longitude: 115.86 },
+            }),
+        ],
         [place({ location: { latitude: -32.0, longitude: 115.86 } })],
         [place({ businessStatus: "CLOSED_PERMANENTLY" })],
         [
@@ -114,6 +119,171 @@ test("wrong, distant, closed and ambiguous places are not used", async () => {
             null,
         );
     }
+});
+
+test("Billabong matches despite lot notation and a highway route alias", async () => {
+    const billabong = {
+        name: "Billabong Roadhouse",
+        brand: "Independent",
+        street: "Lot 2 North West Coastal Hwy",
+        suburb: "MEADOW",
+        latitude: -26.816033,
+        longitude: 114.614261,
+    };
+    const candidate = place({
+        displayName: { text: "Billabong Roadhouse" },
+        location: { latitude: -26.8161973, longitude: 114.6141228 },
+        addressComponents: [
+            ...place().addressComponents.filter(
+                (value) =>
+                    !value.types.some((type) =>
+                        ["street_number", "route", "locality"].includes(type),
+                    ),
+            ),
+            { types: ["street_number"], longText: "Lot 2" },
+            { types: ["route"], longText: "Tourist Drive 354" },
+            { types: ["locality"], longText: "Meadow" },
+        ],
+    });
+    let requests = 0;
+    const result = await api.lookupPlace(billabong, "key", {
+        now,
+        fetcher: async () => {
+            requests++;
+            return Response.json({
+                places: [
+                    candidate,
+                    {
+                        ...candidate,
+                        id: "neighbour",
+                        displayName: { text: "Billabong Homestead Hotel" },
+                        location: {
+                            latitude: -26.816698,
+                            longitude: 114.614426,
+                        },
+                    },
+                ],
+            });
+        },
+    });
+    assert.equal(result?.placeId, "test_place");
+    assert.equal(requests, 1);
+});
+
+test("distinctive exact names at the same forecourt tolerate corner-address differences", async () => {
+    const corner = {
+        ...seed,
+        name: "Caltex Bunbury South",
+        brand: "Caltex",
+        street: "1 Brittain Rd",
+        suburb: "CAREY PARK",
+        latitude: -33.360416,
+        longitude: 115.643581,
+    };
+    const candidate = place({
+        displayName: { text: corner.name },
+        location: { latitude: -33.3602521, longitude: 115.6437037 },
+        addressComponents: place().addressComponents.map((value) =>
+            value.types.includes("route")
+                ? { ...value, longText: "Bussell Highway" }
+                : value.types.includes("street_number")
+                  ? { ...value, longText: "140" }
+                  : value.types.includes("locality")
+                    ? { ...value, longText: "GELORUP" }
+                    : value,
+        ),
+    });
+    assert.equal(
+        (
+            await api.lookupPlace(corner, "key", {
+                now,
+                fetcher: async () => Response.json({ places: [candidate] }),
+            })
+        )?.placeId,
+        "test_place",
+    );
+});
+
+test("address fallback finds a renamed station and reserves each request", async () => {
+    const source = { ...seed, name: "Old Village Fuel", brand: "BP" };
+    let calls = 0;
+    let reserved = 0;
+    const result = await api.lookupPlace(source, "key", {
+        now,
+        beforeRequest: async () => {
+            reserved++;
+        },
+        fetcher: async (_url, init) => {
+            calls++;
+            const query = JSON.parse(init.body).textQuery;
+            if (calls === 1) {
+                assert.ok(query.includes(source.name));
+                return Response.json({});
+            }
+            assert.ok(!query.includes(source.name));
+            assert.ok(query.includes(source.street));
+            return Response.json({
+                places: [place({ displayName: { text: "BP" } })],
+            });
+        },
+    });
+    assert.equal(result?.placeId, "test_place");
+    assert.equal(calls, 2);
+    assert.equal(reserved, 2);
+    const refreshed = await api.lookupPlace(source, "key", {
+        now,
+        placeId: result.placeId,
+        fetcher: async (url) => {
+            assert.equal(url.pathname, "/v1/places/test_place");
+            return Response.json(place({ displayName: { text: "BP" } }));
+        },
+    });
+    assert.equal(refreshed?.placeId, result.placeId);
+});
+
+test("fallback remains bounded, cannot choose an ambiguous site or exceed the budget", async () => {
+    let calls = 0;
+    await assert.rejects(
+        api.lookupPlace(seed, "key", {
+            now,
+            beforeRequest: async () => {
+                if (calls === 1)
+                    throw new api.GoogleLookupError("budget_exhausted");
+            },
+            fetcher: async () => {
+                calls++;
+                return Response.json({});
+            },
+        }),
+        { code: "budget_exhausted" },
+    );
+    assert.equal(calls, 1);
+    calls = 0;
+    assert.equal(
+        await api.lookupPlace(seed, "key", {
+            now,
+            fetcher: async () => {
+                calls++;
+                return Response.json({
+                    places: [place(), place({ id: "neighbour" })],
+                });
+            },
+        }),
+        null,
+    );
+    assert.equal(calls, 1);
+    calls = 0;
+    assert.equal(
+        await api.lookupPlace(seed, "key", {
+            now,
+            fetcher: async () => {
+                calls++;
+                return Response.json({});
+            },
+        }),
+        null,
+    );
+    assert.equal(calls, 2);
 });
 
 test("a shared suburb cannot match a competing neighbouring station", async () => {

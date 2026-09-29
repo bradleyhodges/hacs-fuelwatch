@@ -226,7 +226,7 @@ export async function reserveGoogleRequest(
     if (!reserved) throw new GoogleLookupError("budget_exhausted");
 }
 
-/** Apply a station result only while this invocation owns the lease, fencing delayed or overlapping jobs. */
+/** Apply a result only while this invocation owns the lease; false means no row was written. */
 async function saveResult(
     db: D1Database,
     owner: string,
@@ -236,8 +236,8 @@ async function saveResult(
     failures: number,
     now: number,
     keepExisting = false,
-): Promise<void> {
-    await db
+): Promise<boolean> {
+    const result = await db
         .prepare(`UPDATE station_enrichment SET next_attempt_at = ?, failure_count = ?,
         place_id = CASE WHEN ? THEN place_id ELSE ? END,
         enrichment_json = CASE WHEN ? THEN enrichment_json ELSE ? END
@@ -254,6 +254,7 @@ async function saveResult(
             now,
         )
         .run();
+    return result.meta.changes === 1;
 }
 
 /**
@@ -288,7 +289,19 @@ export async function refreshEnrichment(
         .bind(owner, clock() + 120_000, clock(), clock())
         .run();
     if (lock.meta.changes !== 1) return;
-    let completed = 0;
+    const counts = {
+        matched: 0,
+        unmatched: 0,
+        failed: 0,
+        writeSkipped: 0,
+        requestsReserved: 0,
+    };
+    let stopReason:
+        | "complete"
+        | "time_limit"
+        | "budget_exhausted"
+        | "provider_cooldown"
+        | "lease_lost" = "complete";
     try {
         const state = await db
             .prepare("SELECT next_product FROM enrichment_refresh WHERE id = 1")
@@ -305,7 +318,10 @@ export async function refreshEnrichment(
         const feed = await parseFeed(xml, query.sourceDate);
         // Bound transaction size, fence delayed jobs, and touch unchanged identities only once a day.
         for (let i = 0; i < feed.items.length; i += 50) {
-            if (Date.now() - started > 60_000) break;
+            if (Date.now() - started > 60_000) {
+                stopReason = "time_limit";
+                break;
+            }
             await db.batch(
                 feed.items.slice(i, i + 50).map((item) =>
                     db
@@ -340,7 +356,10 @@ export async function refreshEnrichment(
             .bind(clock(), clock() - 30 * DAY, batchSize)
             .all<DueRow>();
         for (const row of due.results) {
-            if (Date.now() - started > 60_000) break;
+            if (Date.now() - started > 60_000) {
+                stopReason = "time_limit";
+                break;
+            }
             try {
                 // seed_json is exclusively written above from validated FuelWatch data, never from client input.
                 const source = JSON.parse(row.seed_json) as StationSeed;
@@ -352,11 +371,13 @@ export async function refreshEnrichment(
                         now: clock(),
                         refreshDays: days,
                         fetcher: options.fetcher,
-                        beforeRequest: () =>
-                            reserveGoogleRequest(db, clock(), limit),
+                        beforeRequest: async () => {
+                            await reserveGoogleRequest(db, clock(), limit);
+                            counts.requestsReserved++;
+                        },
                     },
                 );
-                await saveResult(
+                const saved = await saveResult(
                     db,
                     owner,
                     row.station_key,
@@ -365,15 +386,25 @@ export async function refreshEnrichment(
                     0,
                     clock(),
                 );
-                completed++;
+                if (!saved) {
+                    counts.writeSkipped++;
+                    stopReason = "lease_lost";
+                    break;
+                }
+                if (value) counts.matched++;
+                else counts.unmatched++;
             } catch (error) {
                 const code =
                     error instanceof GoogleLookupError ? error.code : "storage";
                 console.warn({ event: "enrichment_lookup_failed", code });
                 if (code === "storage") throw error;
-                if (code === "budget_exhausted") break;
+                if (code === "budget_exhausted") {
+                    stopReason = "budget_exhausted";
+                    break;
+                }
+                counts.failed++;
                 const failures = Math.min(row.failure_count + 1, 10);
-                await saveResult(
+                const saved = await saveResult(
                     db,
                     owner,
                     row.station_key,
@@ -383,7 +414,13 @@ export async function refreshEnrichment(
                     clock(),
                     true,
                 );
+                if (!saved) {
+                    counts.writeSkipped++;
+                    stopReason = "lease_lost";
+                    break;
+                }
                 if (code === "configuration" || code === "rate_limited") {
+                    stopReason = "provider_cooldown";
                     await db
                         .prepare(
                             "UPDATE enrichment_refresh SET blocked_until = ? WHERE id = 1 AND owner = ?",
@@ -408,11 +445,20 @@ export async function refreshEnrichment(
                 .prepare("DELETE FROM google_request_budget WHERE utc_day < ?")
                 .bind(new Date(clock() - 35 * DAY).toISOString().slice(0, 10)),
         ]);
+        // Per-run matches are different from feed size and total backlog; expose all three explicitly.
+        const cache = await db
+            .prepare(`SELECT COUNT(*) AS stations,
+            COUNT(enrichment_json) AS enriched,
+            COALESCE(SUM(enrichment_json IS NULL AND next_attempt_at = 0), 0) AS pending
+            FROM station_enrichment`)
+            .first<{ stations: number; enriched: number; pending: number }>();
         console.log({
             event: "enrichment_refreshed",
             product,
             discovered: feed.items.length,
-            completed,
+            ...counts,
+            stopReason,
+            cache,
             durationMs: Date.now() - started,
         });
     } finally {

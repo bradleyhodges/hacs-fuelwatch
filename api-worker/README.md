@@ -135,12 +135,16 @@ The scheduled handler runs every 15 minutes. It rotates through all seven fuel p
 | Setting | Checked-in value | Accepted range / effect |
 | --- | --- | --- |
 | `GOOGLE_DAILY_REQUEST_LIMIT` | `1000` | `0–10000`; `0` disables refresh. Atomic D1 reservations count failures/timeouts too. UTC day resets at 08:00 Perth. |
-| `ENRICHMENT_BATCH_SIZE` | `500` | `1–500`; maximum paid lookups per cron invocation, also subject to time and daily limits. |
+| `ENRICHMENT_BATCH_SIZE` | `100` | `1–500`; maximum stations per cron invocation, also subject to time and daily request limits. Each station can use two requests. |
 | `ENRICHMENT_REFRESH_DAYS` | `30` | `1–30`; successful records become due after this interval. |
 
 If omitted, the code uses conservative fallbacks of 100 requests/day, 10 stations/batch and 7 days. Invalid settings fail the scheduled invocation rather than removing limits. Allow enough capacity for initial discovery, refreshes and negative matches; approximate ongoing successful refresh demand is station count divided by refresh days. The cap is shared only by invocations using this D1 database; other projects using the key need their own controls. Never delete the daily budget table to force a refresh.
 
-Each due station uses one bounded Places request: Text Search for initial discovery, Place Details for a stored ID. Searches require a unique nearby operational WA petrol station, compatible names and no conflicting street number. Locality alone is not identity evidence. Ambiguous, distant, closed or unmatched results supply no enrichment and wait one day before discovery is attempted again. Network, malformed-response and provider failures keep previous data and back off from one hour up to one day. HTTP 400/401/403 pause all refreshes for a day; 429 pauses for an hour. No immediate paid retries occur. Google requests have a five-second deadline and a 256 KiB response limit; credentials travel only in request headers.
+Initial discovery starts with a name/address Text Search. If there is no accepted match, one additional address search looks for petrol stations without the FuelWatch trading name in the query. Stored place IDs use one Place Details request. Ambiguous results and provider errors do not trigger a fallback; every request, including the address fallback, reserves its own unit of the daily budget. A station lookup makes at most two requests, so a batch can use more requests than stations. The fallback is another search strategy, not a retry of a failed HTTP request.
+
+Matching requires a unique nearby operational WA petrol station and rejects conflicting known brands. Exact distinctive names within 50 metres tolerate alternative street addresses: rural lot notation, highway aliases and different roads at a corner otherwise reject correct businesses. For example, Google lists Billabong Roadhouse on Tourist Drive 354 while FuelWatch lists North West Coastal Highway. Generic brand/locality names still require compatible addresses. Other name matches require compatible addresses within 250 metres; locality alone never proves identity. Address-only matching requires an exact normalized street number and road within 50 metres. Unknown street numbers, different roads, nearby competitors and multiple accepted candidates cannot qualify by address alone. Google addresses are matching evidence and a postcode source; FuelWatch's public street/suburb remain unchanged.
+
+Unmatched results wait one day before another attempt. Network, malformed-response and provider failures keep previous data and back off from one hour up to one day. HTTP 400/401/403 pause all refreshes for a day; 429 pauses for an hour. No automatic HTTP retries occur. Each Google request has a five-second deadline and a 256 KiB response limit; a two-search station lookup can take up to ten seconds of HTTP time. Credentials travel only in request headers.
 
 Cached provider data can be served after its refresh deadline with `enrichment.stale: true`, but never once it reaches **30 days old**, regardless of the configured refresh interval. With the checked-in 30-day interval there is no stale grace period: fields may temporarily disappear until cron refreshes them. Stations absent from discovery for 90 days and request counters older than 35 days are pruned. Retained-but-expired records may still hold the place ID for the next refresh. Persistent provider caching is an explicit deployment choice; the [Places policies](https://developers.google.com/maps/documentation/places/web-service/policies) describe Google's storage and attribution requirements.
 
@@ -151,12 +155,19 @@ Operational queries (run with `pnpm exec wrangler d1 execute FUELWATCH_DB --remo
 ```sql
 SELECT utc_day, requests FROM google_request_budget ORDER BY utc_day DESC LIMIT 7;
 SELECT COUNT(*) AS discovered, COUNT(enrichment_json) AS cached FROM station_enrichment;
+SELECT
+  SUM(enrichment_json IS NULL AND next_attempt_at = 0) AS pending,
+  SUM(enrichment_json IS NULL AND next_attempt_at > 0 AND failure_count = 0) AS unmatched,
+  SUM(enrichment_json IS NULL AND failure_count > 0) AS failed
+FROM station_enrichment;
 SELECT owner, lease_until, blocked_until, next_product FROM enrichment_refresh;
 SELECT station_key, next_attempt_at, failure_count FROM station_enrichment
 ORDER BY next_attempt_at LIMIT 20;
 ```
 
-`enrichment_refreshed` logs discovered/completed counts and duration. `enrichment_lookup_failed` includes a safe classification: configuration, rate_limited, upstream, invalid_response, timeout or budget_exhausted. `enrichment_cache_read_failed` means public output continued without some or all enrichment. Missing configuration logs `enrichment_not_configured`. D1 write failures fail the cron invocation so Workers observability records the failure. After correcting credentials, a deliberate `UPDATE enrichment_refresh SET blocked_until = 0 WHERE id = 1` clears the global cooldown; individual retry times still apply. Do not expose database maintenance through the public endpoint.
+`enrichment_refreshed` logs `discovered` (rows in this product's feed, not newly inserted stations), `matched` (enrichments actually saved), `unmatched`, `failed`, `writeSkipped`, `requestsReserved`, `stopReason` and duration. `cache` reports database-wide `stations`, `enriched` (stored profiles, including those due for refresh) and `pending` (no recorded result yet). These replace the ambiguous old `completed` counter, which included no-match results. A run can process more stations than its product feed contains because the due queue includes previously discovered products. A zero-row lease-fenced write is never counted as a saved match.
+
+`enrichment_lookup_failed` includes a safe classification: configuration, rate_limited, upstream, invalid_response, timeout or budget_exhausted. `enrichment_cache_read_failed` means public output continued without some or all enrichment. Missing configuration logs `enrichment_not_configured`. D1 write failures fail the cron invocation so Workers observability records the failure. After correcting credentials, a deliberate `UPDATE enrichment_refresh SET blocked_until = 0 WHERE id = 1` clears the global cooldown; individual retry times still apply. Do not expose database maintenance through the public endpoint.
 
 ## Developer map
 

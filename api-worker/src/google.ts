@@ -109,28 +109,38 @@ function distance(
     return 6371000 * 2 * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
-/** Conservative matching requires an Australian WA fuel site, nearby coordinates and overlapping name. */
-function matches(seed: StationSeed, place: Record<string, unknown>): boolean {
+/** Normalize cadastral lot notation on both sides, without treating a lot as a different street number. */
+function streetNumber(value: string): string {
+    return (
+        /^(?:lot\s*)?(\d+[a-z]?(?:-\d+[a-z]?)?)(?=\s|$)/i
+            .exec(value.trim())?.[1]
+            ?.toLowerCase() ?? ""
+    );
+}
+
+/**
+ * Match a nearby operational WA fuel site using independent name, address and location evidence.
+ * @remarks A distinctive exact name within 50 metres tolerates lot, corner-address and route aliases.
+ * Generic names still require compatible addresses. Address-only matches require an exact number/route
+ * within 50 metres and no conflicting brand. The caller rejects multiple accepted candidates.
+ */
+function matches(
+    seed: StationSeed,
+    place: Record<string, unknown>,
+    byAddress: boolean,
+): boolean {
+    const metres = distance(seed, object(place.location));
     if (
         !list(place.types).includes("gas_station") ||
         place.businessStatus !== "OPERATIONAL" ||
         component(place, "country", true) !== "AU" ||
         component(place, "administrative_area_level_1", true) !== "WA" ||
-        distance(seed, object(place.location)) > 250
+        metres > 250
     )
         return false;
     const sourceName = normalise(seed.name);
     const googleName = normalise(string(object(place.displayName).text));
     if (!googleName) return false;
-    // Nearby forecourts can share a brand/suburb. A conflicting street number rules out even an exact name.
-    const sourceNumber = /^(?:lot\s+)?(\d+[a-z]?(?:-\d+[a-z]?)?)\b/i
-        .exec(seed.street)?.[1]
-        ?.toLowerCase();
-    const googleNumber = component(place, "street_number").toLowerCase();
-    if (sourceNumber && googleNumber && sourceNumber !== googleNumber)
-        return false;
-    const route = component(place, "route");
-    if (route && streetRoute(seed.street) !== streetRoute(route)) return false;
     // Recognize explicit competing brands, but allow unbranded business names such as corner stores.
     const sourceBrand = normalise(seed.brand);
     const namedBrands = knownBrands.filter((brand) =>
@@ -146,7 +156,6 @@ function matches(seed: StationSeed, place: Record<string, unknown>): boolean {
         )
     )
         return false;
-    if (sourceName === googleName) return true;
     // Locality names are location evidence, not business identity (BP Perth must not match Shell Perth).
     const ignored = new Set([
         "the",
@@ -157,6 +166,7 @@ function matches(seed: StationSeed, place: Record<string, unknown>): boolean {
         "petrol",
         "centre",
         "center",
+        "roadhouse",
         ...normalise(seed.suburb).split(" "),
     ]);
     const sourceTokens = sourceName
@@ -165,6 +175,27 @@ function matches(seed: StationSeed, place: Record<string, unknown>): boolean {
     const googleTokens = googleName
         .split(" ")
         .filter((value) => !ignored.has(value));
+    const brandTokens = new Set(sourceBrand.split(" "));
+    const distinctive = sourceTokens.some((token) => !brandTokens.has(token));
+    // FuelWatch may list one road at a corner and Google the other. Their exact branch name plus
+    // a tightly co-located point is stronger evidence than either address spelling on its own.
+    if (sourceName === googleName && distinctive && metres <= 50) return true;
+    const sourceNumber = streetNumber(seed.street);
+    const googleNumber = streetNumber(component(place, "street_number"));
+    if (sourceNumber && googleNumber && sourceNumber !== googleNumber)
+        return false;
+    const route = component(place, "route");
+    if (route && streetRoute(seed.street) !== streetRoute(route)) return false;
+    if (sourceName === googleName) return true;
+    if (
+        byAddress &&
+        metres <= 50 &&
+        sourceNumber &&
+        sourceNumber === googleNumber &&
+        route &&
+        streetRoute(seed.street) === streetRoute(route)
+    )
+        return true;
     const overlap = sourceTokens.filter((value) =>
         googleTokens.includes(value),
     ).length;
@@ -299,19 +330,36 @@ interface LookupOptions {
 }
 
 /**
- * Resolve one FuelWatch station with exactly one Places API request, never a geocoding waterfall.
+ * Resolve one FuelWatch station with a name search and, only after no match, an address search.
  * @param seed Validated FuelWatch identity used both in the query and to reject neighbouring businesses.
  * @param apiKey Server-side Places API (New) credential; never include it in logs or returned data.
  * @param options Persisted place ID, refresh interval, request-budget hook and test dependencies.
  * @returns Verified enrichment, or null for no confident unique match. Existing IDs use Place Details.
  * @throws GoogleLookupError for provider failures. Budget-hook/storage errors propagate unchanged.
- * @remarks Only scheduled refresh calls this function. The API key travels in a header and is never logged.
+ * @remarks At most two requests; stored IDs use one Details request. Every request reserves budget.
+ * Ambiguous matches and provider errors never trigger fallback. Only cron calls this; public reads do not.
  */
 export async function lookupPlace(
     seed: StationSeed,
     apiKey: string,
     options: LookupOptions = {},
 ): Promise<StationEnrichment | null> {
+    // Stored IDs may have been discovered by address. Revalidate using the same strict evidence
+    // instead of discarding an unchanged valid association because its trading name differs.
+    const primary = await lookupOnce(seed, apiKey, options, !!options.placeId);
+    if (primary === "ambiguous") return null;
+    if (primary || options.placeId) return primary;
+    const fallback = await lookupOnce(seed, apiKey, options, true);
+    return fallback === "ambiguous" ? null : fallback;
+}
+
+/** One paid request with its own deadline. Ambiguity is distinct from absence to prevent unsafe fallback. */
+async function lookupOnce(
+    seed: StationSeed,
+    apiKey: string,
+    options: LookupOptions,
+    byAddress: boolean,
+): Promise<StationEnrichment | null | "ambiguous"> {
     if (!apiKey) throw new GoogleLookupError("configuration");
     const now = options.now ?? Date.now();
     const timeout = AbortSignal.timeout(5000);
@@ -343,7 +391,9 @@ export async function lookupPlace(
                 ? {}
                 : {
                       body: JSON.stringify({
-                          textQuery: `${seed.name}, ${seed.street}, ${seed.suburb}, WA, Australia`,
+                          textQuery: byAddress
+                              ? `petrol station at ${seed.street}, ${seed.suburb}, WA, Australia`
+                              : `${seed.name}, ${seed.street}, ${seed.suburb}, WA, Australia`,
                           includedType: "gas_station",
                           strictTypeFiltering: true,
                           pageSize: 5,
@@ -417,8 +467,9 @@ export async function lookupPlace(
         }
         const candidates = rawCandidates
             .map(object)
-            .filter((place) => matches(seed, place));
-        if (candidates.length !== 1) return null;
+            .filter((place) => matches(seed, place, byAddress));
+        if (candidates.length > 1) return "ambiguous";
+        if (!candidates.length) return null;
         const place = candidates[0];
         const placeId = string(place.id, 200);
         if (!/^[\w-]+$/.test(placeId))
