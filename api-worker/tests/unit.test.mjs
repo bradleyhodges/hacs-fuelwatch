@@ -311,7 +311,9 @@ test("ambiguous keys, malformed lists and excessive filter combinations fail val
 });
 
 for (const [now, day, count, expected] of [
-    ["2026-09-29T16:00:00+08:00", "today", 1, 300],
+    ["2026-09-29T16:00:00+08:00", "today", 1, 21600],
+    ["2026-09-29T13:00:00+08:00", "today", 1, 21600],
+    ["2026-09-29T05:00:00+08:00", "today", 1, 21600],
     ["2026-09-29T16:00:00+08:00", "today", 0, 30],
     ["2026-09-29T23:59:45+08:00", "today", 1, 15],
     ["2026-09-29T05:59:45+08:00", "yesterday", 1, 15],

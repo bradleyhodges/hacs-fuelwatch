@@ -5,6 +5,7 @@ export type ErrorCode =
     | "upstream_denied"
     | "upstream_unavailable"
     | "upstream_timeout"
+    | "cache_refresh_busy"
     | "not_found"
     | "method_not_allowed"
     | "unsupported_media_type"

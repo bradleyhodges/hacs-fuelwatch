@@ -15,8 +15,8 @@ import {
     jsonApiError,
     validateJsonApiHeaders,
 } from "./jsonapi";
-import { parseQuery } from "./query";
-import { loadSnapshot } from "./snapshot";
+import { parseQuery, perthTimestamp } from "./query";
+import { loadCachedSnapshot, pruneSnapshots } from "./snapshot-cache";
 import { normalisePhone } from "./station";
 
 /** Apply conditional/HEAD semantics and expose only the remaining shared-cache lifetime. */
@@ -56,6 +56,7 @@ function deliver(
 export default {
     /** Refresh static station details separately from public requests and daily fuel prices. */
     async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+        await pruneSnapshots(env.FUELWATCH_DB);
         await refreshEnrichment(env);
     },
     /** Validate the complete upstream snapshot before publishing either public representation. */
@@ -99,9 +100,15 @@ export default {
             const key = cacheKey(url, query);
             const cached = await readCache(caches.default, key, started);
             if (cached) return deliver(cached, request, "HIT");
-            const feed = await loadSnapshot(env.FUELWATCH_URL, query, {
-                signal: request.signal,
-            });
+            const snapshot = await loadCachedSnapshot(
+                env.FUELWATCH_DB,
+                env.FUELWATCH_URL,
+                query,
+                {
+                    signal: request.signal,
+                },
+            );
+            const { feed } = snapshot;
             const multipleProducts = query.products.length > 1;
             const enrichment =
                 url.pathname === "/v1"
@@ -109,8 +116,10 @@ export default {
                     : undefined;
             const now = Date.now();
             const info = metadata(query, feed.items.length, now);
+            info.fetchedAt = perthTimestamp(snapshot.fetchedAt);
             // A request started just before a rollover cannot cache into the next period.
             const ttl = Math.min(
+                Math.max(0, Math.floor((snapshot.expiresAt - now) / 1000)),
                 enrichmentTtl(enrichment?.values() ?? [], now),
                 cacheTtl(info, now),
                 Math.max(
@@ -152,6 +161,7 @@ export default {
                     "X-FuelWatch-Fresh-Until": String(now + ttl * 1000),
                     "X-FuelWatch-Source-Date": info.sourceDate,
                     "X-FuelWatch-Fetched-At": info.fetchedAt,
+                    "X-FuelWatch-Snapshot-Cache": snapshot.cacheStatus,
                     ETag: etag,
                 },
             });
@@ -160,9 +170,11 @@ export default {
                     writeCache(caches.default, key, response.clone()),
                 );
             console.log({
-                event: "feed_fetched",
+                event: "feed_response",
                 products: query.products,
-                upstreamRequests: query.upstream.length,
+                snapshotCache: snapshot.cacheStatus,
+                upstreamRequests:
+                    snapshot.cacheStatus === "HIT" ? 0 : query.upstream.length,
                 sourceDate: query.sourceDate,
                 stations: feed.items.length,
                 durationMs: now - started,

@@ -133,19 +133,23 @@ JSON:API errors use `{ "jsonapi": { "version": "1.1" }, "errors": [{ "status": "
 | 400 / 404 / 405 | Invalid query / unknown endpoint / unsupported method |
 | 406 / 415 | Unacceptable response media type / unsupported JSON:API Content-Type parameters |
 | 502 | Origin denied or redirected the request, or returned an invalid/oversized snapshot |
-| 503 | Origin unavailable or rate limited; `Retry-After` is preserved when supplied |
+| 503 | Origin unavailable/rate limited, or another request is still refreshing this selection; check `Retry-After` |
 | 504 | The eight-second upstream deadline expired |
 | 500 | Unexpected worker/configuration failure |
 
 ## Freshness and failure handling
 
-The Cache API stores successful nonempty results for at most 300 seconds and empty results for at most 30 seconds. Lifetimes stop at the next Perth midnight, 06:00, 14:30 or price expiry, whichever is sooner. Browser responses require revalidation (`max-age=0`); shared cache freshness uses the remaining lifetime. ETags support conditional requests against the same cached representation.
+Published selections are cached in **D1 for six hours (21,600 seconds)** from the completed origin fetch. All users and Cloudflare data centers share this snapshot, including `/v1` and `/legacy`. Cache identity includes the configured origin, absolute source date and normalized filters, so casing, parameter order, list order and `filter[...]` aliases reuse the same snapshot. Hits preserve `meta.fetchedAt` and never extend the expiry. Distinct selections have distinct entries; overlapping selections are not a global copy of the entire station catalog.
 
-Cache reads and writes can fail without losing a valid origin response. Writes run under `waitUntil`. `X-FuelWatch-Cache`, `X-FuelWatch-Source-Date` and `X-FuelWatch-Fetched-At` expose provenance. Expired cache data is never used as an outage fallback. Home Assistant retains its own last good snapshots and displays their age/errors.
+The local Cache API holds the rendered response for up to the snapshot's remaining six-hour lifetime. HTTP freshness stops earlier at Perth midnight (relative `day` URLs change meaning), price expiry or an enrichment deadline. Rebuilding a response after edge eviction or enrichment expiry still uses D1 without calling FuelWatch. A cached `tomorrow` snapshot can become `today` at midnight because its source date is unchanged. Already published results do not need invalidation at 06:00 or 14:30. Empty results, and multi-product selections missing any requested fuel, are cached for at most **30 seconds**, shortened at publication/day boundaries. This prevents an early request from hiding newly published prices. Browser responses require revalidation (`max-age=0`); shared HTTP caches receive only the remaining `s-maxage`. ETags support conditional GET and HEAD.
+
+On a shared miss, a 60-second SQL lease elects one origin fetcher. Other callers wait up to ten seconds with bounded backoff, then receive `503 cache_refresh_busy` and `Retry-After: 2` if the refresh is still running. Failed fetches release the lease; an abandoned lease expires automatically. Cache publication is awaited before returning success and atomically replaces gzip-compressed chunks of at most 1,000,000 bytes, below D1's per-row limit. Delayed writers cannot overwrite a newer owner's snapshot. Each D1 operation has a two-second caller deadline. Scheduled invocations prune up to 100 expired selections and their chunks, without removing active refreshes.
+
+`X-FuelWatch-Cache: HIT|MISS` describes the local response cache. When it is `MISS`, `X-FuelWatch-Snapshot-Cache: HIT|MISS|BYPASS` distinguishes a shared D1 hit, a newly stored origin fetch, and a storage fallback. On an edge hit, this snapshot header describes how that representation was originally built. `X-FuelWatch-Source-Date` and `X-FuelWatch-Fetched-At` retain origin provenance. Edge writes run under `waitUntil`. Cache failures are logged and fall back to bounded origin fetching; a D1 outage or unapplied migration therefore temporarily loses cross-data-center deduplication. Expired data is never used as an outage fallback. Home Assistant retains its own last good snapshots and displays their age/errors.
 
 One eight-second deadline covers upstream headers, streaming body reads and retry delay. Network failures, 429 and 5xx responses allow at most one retry with jitter. A long `Retry-After` returns immediately rather than holding a worker open. Redirects and validation failures are not retried. Origin cookies, cache headers and XML ETags are not forwarded.
 
-Caching is per Cloudflare data centre. Concurrent cold misses can still issue separate origin requests, and arbitrary suburb queries can create many cache entries. Monitor traffic before adding Cloudflare rate-limiting rules or coordinated refresh storage; there is no distributed single-flight mechanism here.
+Arbitrary suburb queries can create many distinct selections. Monitor D1 storage, rows read/written and unique-query traffic before adding Cloudflare rate-limiting rules. The existing 15-minute enrichment discovery cron continues its own bounded RSS discovery independently of the public response cache.
 
 ## Deploy and operate
 
@@ -157,19 +161,21 @@ pnpm exec wrangler secret put GOOGLE_MAPS_API_KEY
 pnpm run deploy
 ```
 
+The six-hour shared cache requires `migrations/0002_feed_cache.sql`, applied by the migration command above. For local development run `pnpm run db:migrate:local`; local and remote D1 are separate. To inspect the live cache, run `SELECT COUNT(*) AS snapshots, SUM(expires_at > unixepoch() * 1000) AS fresh FROM feed_cache;` in the remote D1 console. The existing station enrichment tables are unchanged.
+
 The key must belong to a billing-enabled Google project with **Places API (New)** enabled. Restrict it to that API and set Google Cloud quotas/budget alerts. The selected phone, hours and facility fields affect the billed SKU; the worker limits request counts, not currency spend. No separate Geocoding API call is made. Local development reads the ignored `.dev.vars` file; never commit it or print the key. Setting a local environment variable does not install the production Worker secret. For FuelWatch-only operation set `GOOGLE_DAILY_REQUEST_LIMIT` to `0`; public requests also work when enrichment is unavailable.
 
 Wrangler's Custom Domain configuration provisions the hostname; `workers.dev` is disabled. `FUELWATCH_URL` must remain an HTTPS origin URL without credentials. Clients of the public read-only endpoint need no API key.
 
 This changes the `/v1` document contract: deploy the worker and matching integration update together. After deployment, verify a real `/v1?filter[product]=1&filter[day]=today` response, a subsequent cache hit, a HEAD request and a rejected invalid query. Deploy the worker before distributing the updated Home Assistant integration. A deployment dry run does not verify DNS, account permissions or live Cloudflare behaviour.
 
-Structured Workers logs include `feed_fetched` (products, upstream request count, date, quote count, elapsed time and TTL), `upstream_http_error` (HTTP status and attempt), `request_failed`, `cache_read_failed` and `cache_write_failed`. Observability currently samples every invocation; review retention and sampling as traffic grows. Alert on sustained 502/503/504 rates, repeated cache failures and unexpectedly empty current-period feeds. `pnpm exec wrangler tail` streams logs.
+Structured Workers logs include `feed_response` (products, `snapshotCache`, upstream selection count, date, quote count, elapsed time and HTTP TTL), `snapshot_cache_unavailable` (operation), `snapshot_cache_corrupt`, `upstream_http_error` (HTTP status and attempt), `request_failed`, `cache_read_failed` and `cache_write_failed`. A shared hit logs zero upstream requests; transport retries are logged separately. Observability currently samples every invocation; review retention and sampling as traffic grows. Alert on sustained 502/503/504 rates, repeated cache failures and unexpectedly empty current-period feeds. `pnpm exec wrangler tail` streams logs.
 
 XML parsing is CPU work on cold requests. Measure production CPU usage and select a Workers plan/CPU limit that accommodates whole-state feeds; local tests do not establish production capacity.
 
 ## D1 enrichment lifecycle and cost controls
 
-Public requests **never contact Google**. On an edge-cache miss, `/v1` reads the requested stations from D1 in indexed batches of 80 keys with a total 1.5-second read budget. Missing tables, corrupt records and D1 outages degrade to FuelWatch-only output. New enrichment becomes visible when the normal response cache expires (up to five minutes). Fuel prices retain their separate short-lived Cache API policy.
+Public requests **never contact Google**. On an edge-cache miss, `/v1` reads the requested stations from D1 in indexed batches of 80 keys with a total 1.5-second read budget. Missing enrichment tables, corrupt records and D1 outages degrade to FuelWatch-only output. New enrichment becomes visible when the response cache expires (up to six hours). Existing profiles' refresh/retention deadlines can shorten the response lifetime without discarding the separately cached FuelWatch snapshot.
 
 The scheduled handler runs every 15 minutes. It rotates through all seven fuel products, discovers identities from validated current FuelWatch RSS, and refreshes due stations. Names/brands are part of the match fingerprint, while the storage key excludes product, day and price; one lookup serves multiple fuel types and dates. Identity changes invalidate the provider association. Repeated discovery updates `last_seen_at` at most once daily to reduce D1 writes. A 120-second database lease prevents overlapping refreshes, conditional writes fence stale invocations, and the worker stops starting work after 60 seconds. A small batch may therefore finish with fewer stations than its configured maximum.
 
@@ -222,7 +228,9 @@ ORDER BY next_attempt_at LIMIT 20;
 | `src/google.ts` | Bounded Places HTTP boundary, confidence matching, hours/facility conversion. |
 | `src/enrichment.ts` | D1 trust boundary, read deadline, discovery, lease, budget and retry state. |
 | `src/cache.ts`, `src/query.ts`, `src/upstream.ts` | Edge freshness, request validation and bounded origin transport. |
+| `src/snapshot-cache.ts` | Shared six-hour snapshots, D1 fill leases, compressed chunk publication and expiry cleanup. |
 | `migrations/0001_station_enrichment.sql` | Station cache, scheduler lease and daily request-counter tables. |
+| `migrations/0002_feed_cache.sql` | Shared feed snapshots and cascading compressed payload chunks. |
 
 Exported utilities and domain boundaries carry JSDoc; dependency injection of clocks/fetchers permits deterministic failure tests. Update normalization tests before extending the controlled vocabularies or source grammar. A DTO change must update `tests/fixtures/fuelwatch-v1.json`, the worker runtime assertions and the Python adapter contract tests together. Do not weaken source validation to accommodate missing enrichment.
 

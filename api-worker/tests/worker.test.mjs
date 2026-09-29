@@ -24,7 +24,7 @@ const migration = await readFile(
     "utf8",
 );
 
-beforeEach(() => {
+beforeEach(async () => {
     requests = [];
     origin = () =>
         new Response(xml(), { headers: { "Content-Type": "text/xml" } });
@@ -47,12 +47,38 @@ beforeEach(() => {
             },
         }),
     );
+    const db = await worker.getD1Database("FUELWATCH_DB");
+    const sql = await readFile(
+        new URL("../migrations/0002_feed_cache.sql", import.meta.url),
+        "utf8",
+    );
+    await db.batch(
+        sql
+            .replace(/--[^\n]*/g, "")
+            .split(";")
+            .filter((sql) => sql.trim())
+            .map((sql) => db.prepare(sql)),
+    );
 });
 afterEach(async () => {
     await worker.dispose();
 });
 const fetchWorker = (path = "/legacy", init) =>
     worker.dispatchFetch(`https://fuelwatch.example${path}`, init);
+
+test("published feeds are shared through D1 across edge caches and equivalent filters", async () => {
+    const first = await fetchWorker("/v1?brand=2,35&product=1,2");
+    assert.equal(first.status, 200);
+    const body = await first.json();
+    const count = requests.length;
+    const second = await worker.dispatchFetch(
+        "https://another-edge.example/v1?FILTER[PRODUCT]=2,1&BRAND=35,2",
+    );
+    assert.equal(second.status, 200);
+    assert.deepEqual(await second.json(), body);
+    assert.equal(requests.length, count);
+    assert.equal(second.headers.get("X-FuelWatch-Snapshot-Cache"), "HIT");
+});
 
 test("legacy JSON keeps fuel fields and RSS content", async () => {
     const response = await fetchWorker();

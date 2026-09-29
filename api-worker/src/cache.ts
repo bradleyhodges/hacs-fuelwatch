@@ -25,25 +25,30 @@ export function enrichmentTtl(
     return Math.max(0, Math.floor((deadline - now) / 1000));
 }
 
-/** Expire at price/publication boundaries even when the origin advertises a longer TTL. */
+/** Published snapshots are reusable for six hours; empty results must not hide publication. */
+export const PUBLISHED_TTL_SECONDS = 6 * 60 * 60;
+
+/** Bound public cache freshness at relative-day rollover, price expiry and pending publication. */
 export function cacheTtl(info: FeedMetadata, now: number): number {
     const today = perthDate(now);
     const boundaries = [
-        `${today}T06:00:00+08:00`,
-        `${today}T14:30:00+08:00`,
         `${shiftDate(today, 1)}T00:00:00+08:00`,
+        ...(info.publicationStatus === "available"
+            ? []
+            : [`${today}T14:30:00+08:00`]),
     ]
         .map(Date.parse)
         .filter((time) => time > now);
     const expiry = Math.min(...boundaries, Date.parse(info.validUntil));
-    const maximum = info.publicationStatus === "available" ? 300 : 30;
+    const maximum =
+        info.publicationStatus === "available" ? PUBLISHED_TTL_SECONDS : 30;
     return Math.max(0, Math.min(maximum, Math.floor((expiry - now) / 1000)));
 }
 
 /** Cache identity contains no client headers, ignored filters or relative dates. */
 export function cacheKey(request: URL, query: FeedQuery): Request {
     const url = new URL(
-        `/__fuelwatch_cache/jsonapi-v2/${request.pathname === "/legacy" ? "legacy" : "compact"}`,
+        `/__fuelwatch_cache/jsonapi-v3/${request.pathname === "/legacy" ? "legacy" : "compact"}`,
         request.origin,
     );
     url.search = query.canonical.toString();

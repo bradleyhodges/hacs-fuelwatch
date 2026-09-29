@@ -3,7 +3,7 @@ export const corsHeaders: Record<string, string> = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": ALLOWED_METHODS,
     "Access-Control-Expose-Headers":
-        "ETag, Retry-After, X-FuelWatch-Cache, X-FuelWatch-Source-Date, X-FuelWatch-Fetched-At",
+        "ETag, Retry-After, X-FuelWatch-Cache, X-FuelWatch-Snapshot-Cache, X-FuelWatch-Source-Date, X-FuelWatch-Fetched-At",
 };
 
 /** Access-Control-Request-Headers is optional on a valid browser preflight. */
