@@ -3,7 +3,12 @@
     "name": "fuelwatch-api-proxy",
     "main": "src/index.ts",
     "compatibility_date": "2026-09-29",
+    "compatibility_flags": ["nodejs_compat"],
     "workers_dev": false,
+    "routes": [
+        { "pattern": "fuelwatch.oss.bhodges.me", "custom_domain": true }
+    ],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
     "vars": {
         "FUELWATCH_URL": "https://www.fuelwatch.wa.gov.au/fuelwatch/fuelWatchRSS"
     }

@@ -1,0 +1,29 @@
+{
+    "schemaVersion": 1,
+    "product": 1,
+    "sourceDate": "2026-09-29",
+    "fetchedAt": "2026-09-29T08:00:00.000Z",
+    "validFrom": "2026-09-28T22:00:00.000Z",
+    "validUntil": "2026-09-29T22:00:00.000Z",
+    "publicationStatus": "available",
+    "feed": {
+        "title": "FuelWatch",
+        "items": [
+            {
+                "title": "Example",
+                "description": "Station description",
+                "brand": "Example",
+                "date": "2026-09-29",
+                "price": "185.9",
+                "trading-name": "Example Station",
+                "location": "PERTH",
+                "address": "1 Test Road",
+                "phone": "",
+                "latitude": "-31.95",
+                "longitude": "115.86",
+                "site-features": "",
+                "restrictions": ""
+            }
+        ]
+    }
+}

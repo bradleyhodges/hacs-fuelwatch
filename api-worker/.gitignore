@@ -8,3 +8,6 @@ wasm-pack.log
 worker/
 node_modules/
 .cargo-ok
+.wrangler/
+.dev.vars*
+.env*

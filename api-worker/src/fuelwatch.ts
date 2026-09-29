@@ -19,216 +19,210 @@ export const FUELWATCH_PRODUCTS = {
 export type FuelWatchProductId = keyof typeof FUELWATCH_PRODUCTS;
 
 /** A date value accepted by FuelWatch's `Day` query parameter. */
-export type FuelWatchDay =
-    | "today"
-    | "tomorrow"
-    | "yesterday";
+export type FuelWatchDay = "today" | "tomorrow" | "yesterday";
 
-    export type ProductId = 1 | 2 | 4 | 5 | 6 | 10 | 11;
-    export type Suburb = string;
-    export type RegionCode =
-        | 25
-        | 26
-        | 27
-        | 15
-        | 28
-        | 63
-        | 1
-        | 30
-        | 2
-        | 16
-        | 3
-        | 29
-        | 19
-        | 4
-        | 33
-        | 5
-        | 34
-        | 35
-        | 36
-        | 6
-        | 20
-        | 37
-        | 38
-        | 39
-        | 31
-        | 7
-        | 40
-        | 41
-        | 17
-        | 21
-        | 22
-        | 42
-        | 8
-        | 43
-        | 9
-        | 44
-        | 45
-        | 10
-        | 18
-        | 32
-        | 58
-        | 46
-        | 47
-        | 48
-        | 61
-        | 23
-        | 11
-        | 49
-        | 50
-        | 60
-        | 12
-        | 62
-        | 13
-        | 51
-        | 57
-        | 14
-        | 53
-        | 24
-        | 54
-        | 55
-        | 59
-        | 56;
-    export type BrandCode =
-        | 29
-        | 2
-        | 41
-        | 34
-        | 3
-        | 4
-        | 5
-        | 52
-        | 39
-        | 6
-        | 36
-        | 32
-        | 44
-        | 24
-        | 35
-        | 25
-        | 53
-        | 7
-        | 15
-        | 10
-        | 47
-        | 30
-        | 11
-        | 48
-        | 49
-        | 42
-        | 45
-        | 40
-        | 38
-        | 26
-        | 43
-        | 14
-        | 50
-        | 46
-        | 23
-        | 27
-        | 31
-        | 37;
-    export type StateRegionCode = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 98;
-    
-    /**
-     * The product IDs and their corresponding names.
-     */
-    export const products: Record<ProductId, string> = {
-        1: "Unleaded Petrol",
-        2: "Premium Unleaded",
-        4: "Diesel",
-        5: "LPG",
-        6: "98 RON",
-        10: "E85",
-        11: "Brand diesel",
-    };
-    
-    /**
-     * The region codes and their corresponding names.
-     */
-    export const regions: Record<RegionCode, string> = {
-        25: "Metro North",
-        26: "Metro South",
-        27: "Metro East/Hills",
-        15: "Albany",
-        28: "Augusta / Margaret River",
-        63: "Bodallin",
-        1: "Boulder",
-        30: "Bridgetown / Greenbushes",
-        2: "Broome",
-        16: "Bunbury",
-        3: "Busselton (Townsite)",
-        29: "Busselton (Shire)",
-        19: "Capel",
-        4: "Carnarvon",
-        33: "Cataby",
-        5: "Collie",
-        34: "Coolgardie",
-        35: "Cunderdin",
-        36: "Dalwallinu",
-        6: "Dampier",
-        20: "Dardanup",
-        37: "Denmark",
-        38: "Derby",
-        39: "Dongara",
-        31: "Donnybrook / Balingup",
-        7: "Esperance",
-        40: "Exmouth",
-        41: "Fitzroy Crossing",
-        17: "Geraldton",
-        21: "Greenough",
-        22: "Harvey",
-        42: "Jurien",
-        8: "Kalgoorlie",
-        43: "Kambalda",
-        9: "Karratha",
-        44: "Kellerberrin",
-        45: "Kojonup",
-        10: "Kununurra",
-        18: "Mandurah",
-        32: "Manjimup",
-        58: "Meckering",
-        46: "Meekatharra",
-        47: "Moora",
-        48: "Mount Barker",
-        61: "Munglinup",
-        23: "Murray",
-        11: "Narrogin",
-        49: "Newman",
-        50: "Norseman",
-        60: "North Bannister",
-        12: "Northam",
-        62: "Northam (Shire)",
-        13: "Port Hedland",
-        51: "Ravensthorpe",
-        57: "Regans Ford",
-        14: "South Hedland",
-        53: "Tammin",
-        24: "Waroona",
-        54: "Williams",
-        55: "Wubin",
-        59: "Wundowie",
-        56: "York",
-    };
-    
-    
-    
-    /**
-     * The state region codes and their corresponding names.
-     */
-    export const stateRegions: Record<StateRegionCode, string> = {
-        1: "Gascoyne",
-        2: "Goldfields-Esperance",
-        3: "Great Southern",
-        4: "Kimberley",
-        5: "Mid-West",
-        6: "Peel",
-        7: "Pilbara",
-        8: "South-West",
-        9: "Wheatbelt",
-        98: "Metro",
-    };
-    
+export type ProductId = 1 | 2 | 4 | 5 | 6 | 10 | 11;
+export type Suburb = string;
+export type RegionCode =
+    | 25
+    | 26
+    | 27
+    | 15
+    | 28
+    | 63
+    | 1
+    | 30
+    | 2
+    | 16
+    | 3
+    | 29
+    | 19
+    | 4
+    | 33
+    | 5
+    | 34
+    | 35
+    | 36
+    | 6
+    | 20
+    | 37
+    | 38
+    | 39
+    | 31
+    | 7
+    | 40
+    | 41
+    | 17
+    | 21
+    | 22
+    | 42
+    | 8
+    | 43
+    | 9
+    | 44
+    | 45
+    | 10
+    | 18
+    | 32
+    | 58
+    | 46
+    | 47
+    | 48
+    | 61
+    | 23
+    | 11
+    | 49
+    | 50
+    | 60
+    | 12
+    | 62
+    | 13
+    | 51
+    | 57
+    | 14
+    | 53
+    | 24
+    | 54
+    | 55
+    | 59
+    | 56;
+export type BrandCode =
+    | 29
+    | 2
+    | 41
+    | 34
+    | 3
+    | 4
+    | 5
+    | 52
+    | 39
+    | 6
+    | 36
+    | 32
+    | 44
+    | 24
+    | 35
+    | 25
+    | 53
+    | 7
+    | 15
+    | 10
+    | 47
+    | 30
+    | 11
+    | 48
+    | 49
+    | 42
+    | 45
+    | 40
+    | 38
+    | 26
+    | 43
+    | 14
+    | 50
+    | 46
+    | 23
+    | 27
+    | 31
+    | 37;
+export type StateRegionCode = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 98;
+
+/**
+ * The product IDs and their corresponding names.
+ */
+export const products: Record<ProductId, string> = {
+    1: "Unleaded Petrol",
+    2: "Premium Unleaded",
+    4: "Diesel",
+    5: "LPG",
+    6: "98 RON",
+    10: "E85",
+    11: "Brand diesel",
+};
+
+/**
+ * The region codes and their corresponding names.
+ */
+export const regions: Record<RegionCode, string> = {
+    25: "Metro North",
+    26: "Metro South",
+    27: "Metro East/Hills",
+    15: "Albany",
+    28: "Augusta / Margaret River",
+    63: "Bodallin",
+    1: "Boulder",
+    30: "Bridgetown / Greenbushes",
+    2: "Broome",
+    16: "Bunbury",
+    3: "Busselton (Townsite)",
+    29: "Busselton (Shire)",
+    19: "Capel",
+    4: "Carnarvon",
+    33: "Cataby",
+    5: "Collie",
+    34: "Coolgardie",
+    35: "Cunderdin",
+    36: "Dalwallinu",
+    6: "Dampier",
+    20: "Dardanup",
+    37: "Denmark",
+    38: "Derby",
+    39: "Dongara",
+    31: "Donnybrook / Balingup",
+    7: "Esperance",
+    40: "Exmouth",
+    41: "Fitzroy Crossing",
+    17: "Geraldton",
+    21: "Greenough",
+    22: "Harvey",
+    42: "Jurien",
+    8: "Kalgoorlie",
+    43: "Kambalda",
+    9: "Karratha",
+    44: "Kellerberrin",
+    45: "Kojonup",
+    10: "Kununurra",
+    18: "Mandurah",
+    32: "Manjimup",
+    58: "Meckering",
+    46: "Meekatharra",
+    47: "Moora",
+    48: "Mount Barker",
+    61: "Munglinup",
+    23: "Murray",
+    11: "Narrogin",
+    49: "Newman",
+    50: "Norseman",
+    60: "North Bannister",
+    12: "Northam",
+    62: "Northam (Shire)",
+    13: "Port Hedland",
+    51: "Ravensthorpe",
+    57: "Regans Ford",
+    14: "South Hedland",
+    53: "Tammin",
+    24: "Waroona",
+    54: "Williams",
+    55: "Wubin",
+    59: "Wundowie",
+    56: "York",
+};
+
+/**
+ * The state region codes and their corresponding names.
+ */
+export const stateRegions: Record<StateRegionCode, string> = {
+    1: "Gascoyne",
+    2: "Goldfields-Esperance",
+    3: "Great Southern",
+    4: "Kimberley",
+    5: "Mid-West",
+    6: "Peel",
+    7: "Pilbara",
+    8: "South-West",
+    9: "Wheatbelt",
+    98: "Metro",
+};
 
 /** Filters supported by the public FuelWatch RSS endpoint. */
 export interface FuelWatchQuery {
@@ -268,56 +262,59 @@ export interface FuelWatchImage {
  */
 export interface FuelWatchChannelFields {
     title: string;
-    link: string;
-    description: string;
-    language: string;
-    copyright: string;
-    lastBuildDate: string;
-    ttl: string;
-    image: FuelWatchImage;
+    link?: string;
+    description?: string;
+    language?: string;
+    copyright?: string;
+    lastBuildDate?: string;
+    ttl?: string;
+    image?: FuelWatchImage;
 }
 
 /**
  * The brand codes and their corresponding names.
  */
-export const brands: Record<29
-| 2
-| 41
-| 34
-| 3
-| 4
-| 5
-| 52
-| 39
-| 6
-| 36
-| 32
-| 44
-| 24
-| 35
-| 25
-| 53
-| 7
-| 15
-| 10
-| 47
-| 30
-| 11
-| 48
-| 49
-| 42
-| 45
-| 40
-| 38
-| 26
-| 43
-| 14
-| 50
-| 46
-| 23
-| 27
-| 31
-| 37, string> = {
+export const brands: Record<
+    | 29
+    | 2
+    | 41
+    | 34
+    | 3
+    | 4
+    | 5
+    | 52
+    | 39
+    | 6
+    | 36
+    | 32
+    | 44
+    | 24
+    | 35
+    | 25
+    | 53
+    | 7
+    | 15
+    | 10
+    | 47
+    | 30
+    | 11
+    | 48
+    | 49
+    | 42
+    | 45
+    | 40
+    | 38
+    | 26
+    | 43
+    | 14
+    | 50
+    | 46
+    | 23
+    | 27
+    | 31
+    | 37,
+    string
+> = {
     29: "7-Eleven",
     2: "Ampol",
     41: "Astron",
@@ -366,7 +363,7 @@ export const brands: Record<29
  */
 export interface FuelWatchItemFields {
     description: string;
-    brand: BrandCode;
+    brand: string;
     date: string;
     price: string;
     "trading-name": string;
@@ -393,7 +390,7 @@ export interface FuelWatchApiResponse {
 export interface FuelWatchStationQuote {
     title: string;
     description: string;
-    brand: BrandCode;
+    brand: string;
     date: string;
     price: number;
     tradingName: string;
@@ -502,7 +499,7 @@ export const normaliseFuelWatchItem = (
     description: item.description,
     brand: item.brand,
     date: item.date,
-    price: parseFiniteNumber(item.price, "price", 0),
+    price: parseFiniteNumber(item.price, "price", 0.001, 10000),
     tradingName: item["trading-name"],
     location: item.location,
     address: item.address,
@@ -534,6 +531,11 @@ const parseFiniteNumber = (
     minimum: number,
     maximum = Number.POSITIVE_INFINITY,
 ): number => {
+    if (
+        typeof value !== "string" ||
+        !/^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value.trim())
+    )
+        throw new TypeError(`Invalid FuelWatch ${field}`);
     const number = Number(value);
     if (!Number.isFinite(number) || number < minimum || number > maximum) {
         throw new TypeError(`Invalid FuelWatch ${field}: ${value}`);
