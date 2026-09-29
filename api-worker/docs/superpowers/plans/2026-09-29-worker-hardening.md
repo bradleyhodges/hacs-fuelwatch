@@ -49,13 +49,13 @@ Files: custom_components/fuelwatch_wa/{api,const,coordinator}.py and manifest.js
 - [x] Set the integration endpoint to https://fuelwatch.oss.bhodges.me/v1, updating the parser to validate JSON, retaining timeouts, retries and coordinator persistence.
 - [x] Add pinned worker CI install, lint, typecheck, runtime tests and dry-run deployment checks.
 - [x] Document endpoints, query/error contract, deployment/domain requirements, freshness, logs, capacity limitations and local commands.
-- [ ] Run focused Python validation and worker CI checks. Commit coherent integration and tooling changes.
+- [x] Run focused Python validation and worker CI checks. Commit coherent integration and tooling changes.
 
 ## Task 3: Independent review and final verification
 
-- [ ] Review all changes against the approved findings with a fresh reviewer.
-- [ ] Reproduce and fix substantive findings with failing regression tests first.
-- [ ] Run final affected checks, confirm main branch and commit scope, and report tests/limits/commits.
+- [x] Review all changes against the approved findings with a fresh reviewer.
+- [x] Reproduce and fix substantive findings with failing regression tests first.
+- [x] Run final affected checks, confirm main branch and commit scope, and report tests/limits/commits.
 
 ## Evidence and adjustments
 
@@ -65,3 +65,4 @@ Files: custom_components/fuelwatch_wa/{api,const,coordinator}.py and manifest.js
 - The live Product 1 JSON shrank from 808,097 to 493,765 bytes; the Python adapter accepted all 938 resulting station records.
 - Isolated Python adapter validation passes 32 tests. Native full HA pytest is blocked by Windows' missing fcntl module; the available WSL distro has a missing VHD and Docker Engine did not become available. The Linux CI job retains the full suite, including a coordinator integration regression test. A portable focused runner explicitly bypasses only the HA package bootstrap.
 - Deployment and push remain out of scope. Unrelated existing working-tree files are preserved.
+- Final independent review found no remaining actionable defects after the station identity compatibility fix. Worker milestone: f777ca9.

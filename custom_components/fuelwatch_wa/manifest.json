@@ -1,0 +1,12 @@
+{
+  "domain": "fuelwatch_wa",
+  "name": "FuelWatch WA",
+  "codeowners": ["bradleyhodges"],
+  "config_flow": true,
+  "dependencies": ["http", "frontend", "panel_custom", "websocket_api"],
+  "documentation": "https://www.fuelwatch.wa.gov.au/tools/rss",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "0.1.0"
+}
