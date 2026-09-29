@@ -4,7 +4,7 @@
   "codeowners": ["bradleyhodges"],
   "config_flow": true,
   "dependencies": ["http", "frontend", "panel_custom", "websocket_api"],
-  "documentation": "https://www.fuelwatch.wa.gov.au/tools/rss",
+  "documentation": "https://github.com/bradleyhodges/hacs-fuelwatch",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "requirements": [],

@@ -1,0 +1,50 @@
+query:
+  name: Query tracking entry
+  description: Return a configured search, station, vehicle or comparison as structured data.
+  fields:
+    tracking_id:
+      name: Tracking ID
+      description: Copy tracking_id from a FuelWatch sensor's attributes.
+      required: true
+      selector:
+        text: {}
+    period:
+      name: Price period
+      default: current
+      selector:
+        select:
+          options: [current, next]
+compare:
+  name: Compare stations
+  description: Return a configured comparison with optional temporary extra-distance/time assumptions.
+  fields:
+    tracking_id:
+      name: Comparison tracking ID
+      required: true
+      selector:
+        text: {}
+    period:
+      name: Price period
+      default: current
+      selector:
+        select:
+          options: [current, next]
+    extra_km:
+      name: Additional total driving distance
+      selector:
+        number:
+          min: 0
+          max: 10000
+          unit_of_measurement: km
+          mode: box
+    extra_minutes:
+      name: Additional journey time
+      selector:
+        number:
+          min: 0
+          max: 10000
+          unit_of_measurement: min
+          mode: box
+refresh:
+  name: Refresh prices
+  description: Request an upstream refresh, subject to the shared debounce and rate limits.

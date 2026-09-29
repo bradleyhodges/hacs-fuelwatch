@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FuelWatch WA — demonstration preview</title>
+<style>body{margin:0;background:#f2f6f4;font:14px system-ui}.demo{padding:8px;text-align:center;background:#fff3d6;color:#684b12;font-size:12px}</style>
+<div class="demo">DEMONSTRATION DATA · Fictional stations and illustrative prices · Not live FuelWatch data</div>
+<fuelwatch-wa-panel></fuelwatch-wa-panel>
+<script type="module">
+import '../../custom_components/fuelwatch_wa/www/fuelwatch-wa-card.js';
+const rows=[
+ ['Example North',-31.863,115.839,177.9,'20 Example Road'],
+ ['Example Central',-31.872,115.834,178.9,'42 Sample Street'],
+ ['Example East',-31.875,115.862,181.5,'8 Demo Avenue'],
+ ['Example West',-31.869,115.821,182.9,'66 Fiction Road'],
+ ['Example South',-31.890,115.837,185.9,'14 Preview Drive'],
+].map(([name,latitude,longitude,price,address],i)=>({station_id:String(i),name,latitude,longitude,price,effective_price:price,rank:i+1,address,suburb:'PERTH',fill_cost:Math.round(price*.375*100)/100,distance_km:.8+i*.7,product:'1',valid_from:'2026-09-29T06:00:00+08:00',valid_until:'2026-09-30T06:00:00+08:00'}));
+const profiles=[{id:'home',title:'Home · Cerato',type:'search'},{id:'compare',title:'Is the detour worth it?',type:'comparison'}];
+document.querySelector('fuelwatch-wa-panel').hass={states:{},callWS:async (request)=>{
+ const result={profiles,products:{'1':'Unleaded 91','6':'Premium 98'},source_errors:{},view:null};
+ if(!request.tracking_id)return result;
+ if(request.tracking_id==='compare') {
+  const km=request.extra_km??10,travel=km*.07*1.859;
+  result.view={type:'comparison',title:'Is the detour worth it?',groups:{},station_a:rows[4],station_b:rows[0],travel:{extra_km:km},comparison:{cost_a:69.71,cost_b:66.71,gross_saving:3,travel_cost:travel,time_cost:0,net_saving:3-travel,break_even_litres:travel/.08},worth_it:3-travel>=1};
+ }else result.view={type:'search',title:'Home · Cerato',groups:{'1':rows.map(r=>({...r,price:r.price-(request.period==='next'?4:0),effective_price:r.price-(request.period==='next'?4:0)}))},price_basis:'advertised',centre:{latitude:-31.872,longitude:115.84,radius:5},vehicle:{title:'Cerato',volume:37.5,purchase_mode:'current'}};
+ return result;
+}};
+</script>

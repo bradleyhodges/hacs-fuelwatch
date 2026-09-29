@@ -66,6 +66,51 @@ afterEach(async () => {
 const fetchWorker = (path = "/legacy", init) =>
     worker.dispatchFetch(`https://fuelwatch.example${path}`, init);
 
+test("v1 defaults to every product grouped into one serviceStation and reuses its catalogue", async () => {
+    origin = (request) =>
+        new Response(
+            xml().replace(
+                "185.9",
+                String(
+                    180 +
+                        Number(
+                            new URL(request.url).searchParams.get("Product"),
+                        ),
+                ),
+            ),
+        );
+    const response = await fetchWorker("/v1");
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.meta.products, [1, 2, 4, 5, 6, 10, 11]);
+    assert.equal(body.data.length, 1);
+    assert.equal(body.data[0].type, "serviceStation");
+    assert.deepEqual(body.data[0].attributes.price.products, {
+        1: 181,
+        2: 182,
+        4: 184,
+        5: 185,
+        6: 186,
+        10: 190,
+        11: 191,
+    });
+    assert.equal(body.data[0].attributes.price.perLitre, undefined);
+    assert.equal(body.data[0].attributes.product, undefined);
+    assert.equal(requests.length, 7);
+    const subset = await fetchWorker(
+        "/v1?product=2,6&suburb=perth&surrounding=no",
+    );
+    assert.equal(subset.status, 200);
+    const filtered = await subset.json();
+    assert.equal(filtered.data[0].id, body.data[0].id);
+    assert.deepEqual(filtered.data[0].attributes.price.products, {
+        2: 182,
+        6: 186,
+    });
+    assert.equal(requests.length, 7);
+    assert.equal(subset.headers.get("X-FuelWatch-Snapshot-Cache"), "HIT");
+});
+
 test("published feeds are shared through D1 across edge caches and equivalent filters", async () => {
     const first = await fetchWorker("/v1?brand=2,35&product=1,2");
     assert.equal(first.status, 200);
@@ -131,7 +176,7 @@ test("public requests merge D1 data without contacting Google", async () => {
             JSON.stringify(cached),
         )
         .run();
-    const response = await fetchWorker("/v1");
+    const response = await fetchWorker("/v1?product=1");
     assert.equal(response.status, 200);
     const station = (await response.json()).data[0].attributes;
     assert.equal(station.address.postcode, "6000");
@@ -181,16 +226,16 @@ test("versioned JSON excludes redundant descriptions and exposes provenance", as
     assert.equal(body.meta.product, 4);
     assert.equal(body.meta.sourceDate, perthDate());
     assert.equal(body.meta.publicationStatus, "available");
-    assert.equal(body.data[0].type, "fuelPrices");
+    assert.equal(body.data[0].type, "serviceStation");
     assert.equal(typeof body.data[0].id, "string");
     const attributes = body.data[0].attributes;
-    assert.equal(attributes.product, 4);
+    assert.equal(attributes.product, undefined);
     assert.equal(attributes.tradingName, "Example Station");
     assert.deepEqual(attributes.siteFeatures, []);
     assert.equal(attributes.content, undefined);
     assert.equal(attributes.contentSnippet, undefined);
     assert.equal(attributes.description, undefined);
-    assert.equal(attributes.price.perLitre, 185.9);
+    assert.equal(attributes.price.products[4], 185.9);
     assert.equal(attributes.price.asAt, `${perthDate()}T06:00:00.000+08:00`);
     assert.equal(attributes.address.suburb, "PERTH");
     assert.ok(
@@ -235,7 +280,7 @@ test("JSON API errors use errors arrays with safe string status codes", async ()
 });
 
 test("JSON API content negotiation rejects unsupported media parameters before cache access", async () => {
-    const valid = await fetchWorker("/v1", {
+    const valid = await fetchWorker("/v1?product=1", {
         headers: { Accept: "application/vnd.api+json" },
     });
     assert.equal(valid.status, 200);
@@ -263,7 +308,7 @@ test("JSON API content negotiation rejects unsupported media parameters before c
             415,
         ],
     ]) {
-        const response = await fetchWorker("/v1", { headers });
+        const response = await fetchWorker("/v1?product=1", { headers });
         assert.equal(response.status, status, JSON.stringify(headers));
         assert.equal((await response.json()).errors[0].status, String(status));
         assert.equal(response.headers.get("Cache-Control"), "no-store");
@@ -276,29 +321,29 @@ test("JSON API content negotiation rejects unsupported media parameters before c
         'application/vnd.api+json;ext="https://example.com/unknown", application/vnd.api+json;q=0.9',
         "application/vnd.api+json;charset=utf-8, application/vnd.api+json",
     ]) {
-        const response = await fetchWorker("/v1", { headers: { Accept } });
+        const response = await fetchWorker("/v1?product=1", {
+            headers: { Accept },
+        });
         assert.equal(response.status, 200, Accept);
         await response.text();
     }
 });
 
-test("JSON API IDs are stable across filters and rebranding and distinguish fuel products", async () => {
+test("JSON API IDs are stable across product selections and rebranding", async () => {
     const first = (await (await fetchWorker("/v1?product=1,2")).json()).data;
-    assert.equal(first.length, 2);
-    assert.notEqual(first[0].id, first[1].id);
+    assert.equal(first.length, 1);
     origin = () =>
         new Response(
             xml()
                 .replace("Example Station", "New Name")
                 .replace("185.9", "199.9"),
         );
+    // A source-side region query bypasses the previously warmed unfiltered selection.
     const renamed = (
-        await (
-            await fetchWorker("/v1?filter[product]=1&filter[brand]=2")
-        ).json()
+        await (await fetchWorker("/v1?product=1&region=25")).json()
     ).data;
     assert.equal(renamed[0].id, first[0].id);
-    assert.equal(renamed[0].attributes.price.perLitre, 199.9);
+    assert.equal(renamed[0].attributes.price.products[1], 199.9);
 });
 
 test("unknown paths and unsupported methods do not contact upstream", async () => {
@@ -345,12 +390,12 @@ test("root redirects preserve CORS and enforce method handling", async () => {
 });
 
 test("cold HEAD succeeds and shares the GET cache entry", async () => {
-    const head = await fetchWorker("/v1", { method: "HEAD" });
+    const head = await fetchWorker("/v1?product=1", { method: "HEAD" });
     assert.equal(head.status, 200);
     assert.equal(await head.text(), "");
     // Cache writes run in waitUntil: poll only the local runtime until visible.
     for (let i = 0; i < 20; i++) {
-        const result = await fetchWorker("/v1");
+        const result = await fetchWorker("/v1?product=1");
         await result.text();
         if (result.headers.get("X-FuelWatch-Cache") === "HIT") return;
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -377,7 +422,7 @@ test("CORS preflight does not require Access-Control-Request-Headers", async () 
 test("conditional GET and HEAD return a bodyless 304 for a cached representation", async () => {
     let response;
     for (let i = 0; i < 20; i++) {
-        response = await fetchWorker("/v1");
+        response = await fetchWorker("/v1?product=1");
         await response.text();
         if (response.headers.get("X-FuelWatch-Cache") === "HIT") break;
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -385,7 +430,7 @@ test("conditional GET and HEAD return a bodyless 304 for a cached representation
     assert.equal(response.headers.get("X-FuelWatch-Cache"), "HIT");
     const count = requests.length;
     for (const method of ["GET", "HEAD"]) {
-        const result = await fetchWorker("/v1", {
+        const result = await fetchWorker("/v1?product=1", {
             method,
             headers: { "If-None-Match": `W/${response.headers.get("ETag")}` },
         });
@@ -401,7 +446,7 @@ test("valid empty snapshots have a short explicit cache lifetime", async () => {
         new Response(
             '<rss version="2.0"><channel><title>FuelWatch</title></channel></rss>',
         );
-    const response = await fetchWorker("/v1");
+    const response = await fetchWorker("/v1?product=1");
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.meta.publicationStatus, "empty");
@@ -526,59 +571,47 @@ test("equivalent query order and absolute dates resolve to one cache key", async
     assert.equal(new URL(requests[0]).searchParams.get("Day"), "today");
 });
 
-test("case-insensitive lists combine brands and products without mixing fuel prices", async () => {
+test("case-insensitive brand/product selections reuse complete product catalogues", async () => {
     origin = (request) => {
         const params = new URL(request.url).searchParams;
-        const brand = params.get("Brand");
-        const product = params.get("Product");
-        assert.ok(["2", "35"].includes(brand));
-        assert.ok(["1", "2", "6"].includes(product));
-        assert.equal(params.get("Day"), "today");
+        assert.equal(params.get("Brand"), null);
+        const product = Number(params.get("Product"));
+        const stations = ["Ampol", "EG Ampol", "BP"]
+            .map((brand, i) =>
+                xml()
+                    .match(/<item>.*<\/item>/s)[0]
+                    .replace(
+                        "<brand>Example</brand>",
+                        `<brand>${brand}</brand>`,
+                    )
+                    .replace("1 Test Road", `${i + 1} Test Road`)
+                    .replace("185.9", String(180 + product)),
+            )
+            .join("");
         return new Response(
-            xml()
-                .replace(
-                    "<brand>Example</brand>",
-                    `<brand>${brand === "2" ? "Ampol" : "EG Ampol"}</brand>`,
-                )
-                .replace("1 Test Road", `${brand} Test Road`)
-                .replace("185.9", String(180 + Number(product))),
+            `<rss version="2.0"><channel><title>FuelWatch</title>${stations}</channel></rss>`,
         );
     };
-    const response = await fetchWorker(
-        "/v1?brand=2,35&product=1,2,6&day=ToDaY",
-    );
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.equal(body.meta.product, undefined);
+    const first = await fetchWorker("/v1?brand=2,35&product=1,2,6&day=ToDaY");
+    assert.equal(first.status, 200);
+    const body = await first.json();
     assert.deepEqual(body.meta.products, [1, 2, 6]);
     assert.deepEqual(
-        body.data.map(({ attributes: item }) => [
-            item.product,
-            item.brand,
-            item.price.perLitre,
-        ]),
+        body.data.map(({ attributes: a }) => [a.brand, a.price.products]),
         [
-            [1, "Ampol", 181],
-            [1, "EG Ampol", 181],
-            [2, "Ampol", 182],
-            [2, "EG Ampol", 182],
-            [6, "Ampol", 186],
-            [6, "EG Ampol", 186],
+            ["Ampol", { 1: 181, 2: 182, 6: 186 }],
+            ["EG Ampol", { 1: 181, 2: 182, 6: 186 }],
         ],
     );
-    assert.equal(requests.length, 6);
-    for (let i = 0; i < 20; i++) {
-        const hit = await fetchWorker(
-            "/v1?PRODUCT=6,2,1,1&BRAND=35,2&DAY=today",
-        );
-        const cached = await hit.json();
-        if (hit.headers.get("X-FuelWatch-Cache") === "HIT") {
-            assert.deepEqual(cached, body);
-            return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.fail("Equivalent lists never shared their cache entry");
+    assert.equal(requests.length, 3);
+    const changed = await fetchWorker("/v1?BRAND=5&PRODUCT=6,2,1");
+    assert.equal((await changed.json()).data[0].attributes.brand, "BP");
+    assert.equal(requests.length, 3);
+    assert.equal(changed.headers.get("X-FuelWatch-Snapshot-Cache"), "HIT");
+    const equivalent = await fetchWorker(
+        "/v1?FILTER[PRODUCT]=6,2,1&FILTER[BRAND]=35,2",
+    );
+    assert.deepEqual(await equivalent.json(), body);
 });
 
 test("overlapping region and suburb lists deduplicate stations per fuel product", async () => {
@@ -589,15 +622,15 @@ test("overlapping region and suburb lists deduplicate stations per fuel product"
     const body = await response.json();
     assert.equal(requests.length, 8);
     assert.deepEqual(
-        body.data.map((item) => item.attributes.product),
-        [1, 2],
+        body.data.map((item) => item.attributes.price.products),
+        [{ 1: 185.9, 2: 185.9 }],
     );
-    const single = await fetchWorker("/v1?product=1,1&brand=2,35");
+    const single = await fetchWorker("/v1?product=1,1&region=25,26");
     const singleBody = await single.json();
     assert.equal(singleBody.meta.product, 1);
     assert.equal(singleBody.meta.products, undefined);
     assert.equal(singleBody.data.length, 1);
-    assert.equal(singleBody.data[0].attributes.product, 1);
+    assert.equal(singleBody.data[0].attributes.price.products[1], 185.9);
 });
 
 test("a failed component never produces or caches a partial combined snapshot", async () => {
@@ -615,7 +648,7 @@ test("a failed component never produces or caches a partial combined snapshot", 
     broken = false;
     const retry = await fetchWorker("/v1?PRODUCT=2,1");
     assert.equal(retry.status, 200);
-    assert.equal((await retry.json()).data.length, 2);
+    assert.equal((await retry.json()).data.length, 1);
     assert.equal(retry.headers.get("X-FuelWatch-Cache"), "MISS");
 });
 
@@ -649,7 +682,7 @@ test("legacy supports product lists and keeps its cache separate from v1", async
     );
     const compact = await fetchWorker("/v1?product=1,2");
     assert.equal(
-        (await compact.json()).data[0].attributes.price.perLitre,
+        (await compact.json()).data[0].attributes.price.products[1],
         185.9,
     );
 });

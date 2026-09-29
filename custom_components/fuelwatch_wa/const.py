@@ -7,6 +7,7 @@ NAME = "FuelWatch WA"
 VERSION = "0.1.0"
 PERTH = ZoneInfo("Australia/Perth")
 FEED_URL = "https://fuelwatch.oss.bhodges.me/v1"
+FEED_SOURCE = "fuelwatch.wa.gov.au"
 PRODUCTS = {
     "1": "Unleaded 91",
     "2": "Premium unleaded 95",

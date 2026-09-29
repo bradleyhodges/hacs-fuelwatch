@@ -5,6 +5,7 @@ import {
     readCache,
     writeCache,
 } from "./cache";
+import { loadCatalogue } from "./catalogue";
 import { readEnrichments, refreshEnrichment } from "./enrichment";
 import { ApiError } from "./errors";
 import { metadata } from "./feed";
@@ -16,7 +17,7 @@ import {
     validateJsonApiHeaders,
 } from "./jsonapi";
 import { parseQuery, perthTimestamp } from "./query";
-import { loadCachedSnapshot, pruneSnapshots } from "./snapshot-cache";
+import { pruneSnapshots } from "./snapshot-cache";
 import { normalisePhone } from "./station";
 import { HOURLY_CRON, warmSnapshots } from "./warm";
 
@@ -101,11 +102,15 @@ export default {
                 });
             }
             if (!legacy) validateJsonApiHeaders(request.headers);
-            const query = parseQuery(url.searchParams, started);
+            const query = parseQuery(
+                url.searchParams,
+                started,
+                legacy ? "legacy" : "catalogue",
+            );
             const key = cacheKey(url, query);
             const cached = await readCache(caches.default, key, started);
             if (cached) return deliver(cached, request, "HIT");
-            const snapshot = await loadCachedSnapshot(
+            const snapshot = await loadCatalogue(
                 env.FUELWATCH_DB,
                 env.FUELWATCH_URL,
                 query,
@@ -178,8 +183,7 @@ export default {
                 event: "feed_response",
                 products: query.products,
                 snapshotCache: snapshot.cacheStatus,
-                upstreamRequests:
-                    snapshot.cacheStatus === "HIT" ? 0 : query.upstream.length,
+                upstreamRequests: snapshot.upstreamRequests,
                 sourceDate: query.sourceDate,
                 stations: feed.items.length,
                 durationMs: now - started,

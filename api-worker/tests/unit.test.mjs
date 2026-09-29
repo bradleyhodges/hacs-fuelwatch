@@ -561,3 +561,29 @@ test("station count and conflicting identities are bounded atomically", async ()
         2,
     );
 });
+
+test("catalogue defaults to every fuel and bounds source-filter expansion only", () => {
+    const all = api.parseQuery(
+        new URLSearchParams("brand=2,5,35,15"),
+        time("2026-09-29T16:00:00+08:00"),
+        "catalogue",
+    );
+    assert.deepEqual(all.products, [1, 2, 4, 5, 6, 10, 11]);
+    assert.equal(all.upstream.length, 7);
+    assert.equal(all.catalogue, true);
+    for (const [filters, expected] of [
+        ["suburb=perth", false],
+        ["suburb=perth&surrounding=yes", false],
+        ["suburb=perth&surrounding=no", true],
+        ["region=25", false],
+    ]) {
+        assert.equal(
+            api.parseQuery(
+                new URLSearchParams(filters),
+                Date.now(),
+                "catalogue",
+            ).catalogue,
+            expected,
+        );
+    }
+});

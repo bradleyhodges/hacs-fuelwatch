@@ -13,6 +13,8 @@ export const PERTH_OFFSET_MS = 8 * 3_600_000;
 export const MAX_FILTER_COMBINATIONS = 24;
 /** A canonical public selection and its finite, single-value upstream requests. */
 export interface FeedQuery {
+    /** Filters can be evaluated against the complete per-product D1 catalogue. */
+    catalogue?: boolean;
     products: FuelWatchProductId[];
     sourceDate: string;
     upstream: URLSearchParams[];
@@ -39,12 +41,18 @@ const invalid = (): never => {
 
 /**
  * Validate case-insensitive query names/values and expand OR lists into upstream requests.
+ * @param mode Catalogue mode selects all fuels by default and defers supported filters to D1
+ * selection. Legacy mode preserves the RSS-shaped endpoint and internal single-product defaults.
  * @remarks FuelWatch silently ignores unsupported comma lists. Each expanded request contains
  * one value per filter; their union implements OR within a filter and AND across filters.
  * Repeated parameter names remain invalid even with different casing. List duplicates are harmless.
  * Day and Surrounding remain scalar because a snapshot has one price period and one search mode.
  */
-export function parseQuery(params: URLSearchParams, now: number): FeedQuery {
+export function parseQuery(
+    params: URLSearchParams,
+    now: number,
+    mode: "legacy" | "catalogue" = "legacy",
+): FeedQuery {
     if (
         params.size > FUELWATCH_QUERY_PARAMETERS.length ||
         params.toString().length > 1024
@@ -77,7 +85,13 @@ export function parseQuery(params: URLSearchParams, now: number): FeedQuery {
         ["Brand", brands],
         ["Region", regions],
     ] as const) {
-        const raw = normalized.get(name) ?? (name === "Product" ? "1" : null);
+        const raw =
+            normalized.get(name) ??
+            (name === "Product"
+                ? mode === "catalogue"
+                    ? Object.keys(FUELWATCH_PRODUCTS).join(",")
+                    : "1"
+                : null);
         if (raw === null) continue;
         const values = raw.split(",").map((value) => value.trim());
         if (
@@ -100,7 +114,16 @@ export function parseQuery(params: URLSearchParams, now: number): FeedQuery {
         if (values.some((value) => !value || value.length > 100)) invalid();
         filters.set("Suburb", [...new Set(values)].sort());
     }
-    const combinations = [...filters.values()].reduce(
+    // RSS has no region or surrounding-suburb membership. Keep those searches at the source.
+    const catalogue =
+        mode === "catalogue" &&
+        !filters.has("Region") &&
+        (!filters.has("Suburb") ||
+            normalized.get("Surrounding")?.toLowerCase() === "no");
+    const expandedFilters = catalogue
+        ? new Map([...filters].filter(([name]) => name === "Product"))
+        : filters;
+    const combinations = [...expandedFilters.values()].reduce(
         (count, values) => count * values.length,
         1,
     );
@@ -139,6 +162,7 @@ export function parseQuery(params: URLSearchParams, now: number): FeedQuery {
     const canonical = new URLSearchParams(scalar);
     for (const [name, values] of filters) {
         canonical.set(name, values.join(","));
+        if (!expandedFilters.has(name)) continue;
         upstream = upstream.flatMap((params) =>
             values.map((value) => {
                 const expanded = new URLSearchParams(params);
@@ -150,7 +174,7 @@ export function parseQuery(params: URLSearchParams, now: number): FeedQuery {
     for (const params of upstream) params.sort();
     canonical.set("Day", sourceDate);
     canonical.sort();
-    return { products, sourceDate, upstream, canonical };
+    return { products, sourceDate, upstream, canonical, catalogue };
 }
 
 /** Only configuration chooses the origin; client input supplies validated filters. */

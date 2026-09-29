@@ -15,6 +15,8 @@ export interface CachedSnapshot {
     fetchedAt: number;
     expiresAt: number;
     cacheStatus: "HIT" | "MISS" | "BYPASS";
+    /** Actual origin calls made during this load, including retries; zero on D1 hits. */
+    upstreamRequests: number;
 }
 interface CacheChunk {
     fetched_at: number;
@@ -115,6 +117,7 @@ async function readSnapshot(
             fetchedAt: first.fetched_at,
             expiresAt: first.expires_at,
             cacheStatus: "HIT",
+            upstreamRequests: 0,
         };
     } catch {
         console.warn({ event: "snapshot_cache_corrupt" });
@@ -153,7 +156,15 @@ export async function loadCachedSnapshot(
 ): Promise<CachedSnapshot> {
     const clock = options.clock ?? Date.now;
     const fetchSnapshot = async (): Promise<CachedSnapshot> => {
-        const feed = await loadSnapshot(base, query, options);
+        let upstreamRequests = 0;
+        const fetcher = options.fetcher ?? fetch;
+        const feed = await loadSnapshot(base, query, {
+            ...options,
+            fetcher: (url, init) => {
+                upstreamRequests++;
+                return fetcher(url, init);
+            },
+        });
         const fetchedAt = clock();
         const info = metadata(query, feed.items.length, fetchedAt);
         // One fuel can be published before another. Do not hide the missing product for six hours.
@@ -171,6 +182,7 @@ export async function loadCachedSnapshot(
             fetchedAt,
             expiresAt: fetchedAt + ttl * 1000,
             cacheStatus: "BYPASS",
+            upstreamRequests,
         };
     };
     if (!db) return fetchSnapshot();

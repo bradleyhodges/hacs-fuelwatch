@@ -13,7 +13,7 @@ const output = fileURLToPath(
 await build({
     stdin: {
         contents:
-            'export * from "./src/snapshot-cache"; export * from "./src/query"; export * from "./src/warm";',
+            'export * from "./src/snapshot-cache"; export * from "./src/query"; export * from "./src/warm"; export * from "./src/catalogue";',
         resolveDir: fileURLToPath(new URL("..", import.meta.url)),
         loader: "ts",
     },
@@ -368,5 +368,84 @@ test("corrupt snapshots are replaced and cleanup removes expired chunks without 
                 .first()
         ).n,
         1,
+    );
+});
+
+test("hourly extracts serve all products and changed exact filters without origin requests", async () => {
+    await api.warmSnapshots(
+        { FUELWATCH_DB: db, FUELWATCH_URL: source },
+        now,
+        options(),
+    );
+    assert.equal(calls, 7);
+    const read = (filters) =>
+        api.loadCatalogue(
+            db,
+            source,
+            api.parseQuery(new URLSearchParams(filters), now, "catalogue"),
+            options(),
+        );
+    for (const filters of [
+        "",
+        "product=2,6",
+        "suburb=PERTH&surrounding=no",
+        "brand=5",
+    ])
+        assert.equal((await read(filters)).cacheStatus, "HIT");
+    assert.equal(calls, 7);
+    assert.equal((await read("")).feed.items.length, 7);
+    assert.equal(
+        (await read("suburb=fremantle&surrounding=no")).feed.items.length,
+        0,
+    );
+});
+
+test("catalogue keeps original provenance and retries only the missing product", async () => {
+    const read = () =>
+        api.loadCatalogue(
+            db,
+            source,
+            api.parseQuery(
+                new URLSearchParams("product=1,2"),
+                now,
+                "catalogue",
+            ),
+            options(),
+        );
+    origin = (url) =>
+        new Response(
+            xml(url.searchParams.get("Product") === "2" ? "" : item()),
+        );
+    const first = await read();
+    assert.equal(first.expiresAt, now + 30_000);
+    assert.equal(calls, 2);
+    now += 30_000;
+    origin = () => new Response(xml());
+    const complete = await read();
+    assert.equal(complete.feed.items.length, 2);
+    assert.equal(complete.fetchedAt, first.fetchedAt);
+    assert.equal(complete.upstreamRequests, 1);
+    assert.equal(calls, 3);
+});
+
+test("catalogue aborts hanging origin work and never returns a partial result", async () => {
+    const selection = api.parseQuery(
+        new URLSearchParams("product=1,2"),
+        now,
+        "catalogue",
+    );
+    await assert.rejects(
+        api.loadCatalogue(undefined, source, selection, {
+            timeoutMs: 30,
+            fetcher: (_url, init) =>
+                new Promise((_resolve, reject) => {
+                    init.signal.addEventListener(
+                        "abort",
+                        () => reject(new DOMException("Aborted", "AbortError")),
+                        { once: true },
+                    );
+                }),
+        }),
+        { code: "upstream_timeout" },
     );
 });

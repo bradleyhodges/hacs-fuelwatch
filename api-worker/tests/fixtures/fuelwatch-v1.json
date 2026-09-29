@@ -13,14 +13,16 @@
     },
     "data": [
         {
-            "type": "fuelPrices",
-            "id": "2026-09-29:1:238232d151f5f92bbce32951b828cb7fe4887fdc1ac868628c7ab33d4eda4e3b",
+            "type": "serviceStation",
+            "id": "2026-09-29:238232d151f5f92bbce32951b828cb7fe4887fdc1ac868628c7ab33d4eda4e3b",
             "attributes": {
                 "name": "Example Station",
                 "brand": "Example",
                 "price": {
-                    "perLitre": 185.9,
-                    "asAt": "2026-09-29T06:00:00.000+08:00"
+                    "asAt": "2026-09-29T06:00:00.000+08:00",
+                    "products": {
+                        "1": 185.9
+                    }
                 },
                 "address": {
                     "street": "1 Test Road",
@@ -34,8 +36,7 @@
                 "is24Hours": null,
                 "restrictions": null,
                 "tradingName": "Example Station",
-                "siteFeatures": [],
-                "product": 1
+                "siteFeatures": []
             }
         }
     ]

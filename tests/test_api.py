@@ -17,7 +17,7 @@ def feed(price=185.9, day="2026-09-29", brand="Test"):
     fixture = Path(__file__).parents[1] / "api-worker/tests/fixtures/fuelwatch-v1.json"
     data = json.loads(fixture.read_text())
     data["data"][0]["attributes"].update(
-        {"price": {"perLitre": price, "asAt": f"{day}T06:00:00.000+08:00"}, "brand": brand}
+        {"price": {"products": {"1": price}, "asAt": f"{day}T06:00:00.000+08:00"}, "brand": brand}
     )
     return json.dumps(data).encode()
 
@@ -33,7 +33,7 @@ def change(**values):
 
 
 def first_price(value):
-    return {"perLitre": value, "asAt": "2026-09-29T06:00:00.000+08:00"}
+    return {"products": {"1": value}, "asAt": "2026-09-29T06:00:00.000+08:00"}
 
 
 def test_parse_quote_and_brand_independent_identity():
@@ -66,7 +66,7 @@ def test_parse_quote_and_brand_independent_identity():
         change(data="invalid"),
         feed(price=True),
         feed(price={"value": "185.9"}),
-        feed().replace(b'"perLitre": 185.9', b'"perLitre": 185.9, "perLitre": 100'),
+        feed().replace(b'"1": 185.9', b'"1": 185.9, "1": 100'),
         feed().replace(b"T06:00:00.000+08:00", b"T00:00:00.000Z"),
         feed().replace(b'"latitude": -31.95', b'"latitude": "-31.95"'),
         feed().replace(b'"state": "WA"', b'"state": "NSW"'),
@@ -110,13 +110,27 @@ def test_resource_fuel_must_match_the_requested_snapshot(product):
         parse_feed(json.dumps(data).encode(), "1", DAY)
 
 
-def test_error_and_multi_product_documents_cannot_replace_a_single_product_snapshot():
+def test_grouped_products_are_selected_without_inventing_unavailable_fuel():
     document = json.loads(feed())
     document["meta"].pop("product")
-    document["meta"]["products"] = [1, 2]
-    for payload in (document, {"errors": [{"status": "502"}]}):
-        with pytest.raises(FeedError):
-            parse_feed(json.dumps(payload).encode(), "1", DAY)
+    document["meta"]["products"] = [1, 2, 6]
+    document["data"][0]["attributes"]["price"]["products"] = {"1": 185.9, "2": 200.2}
+    payload = json.dumps(document).encode()
+    assert parse_feed(payload, "1", DAY)[0].price == Decimal("185.9")
+    assert parse_feed(payload, "2", DAY)[0].price == Decimal("200.2")
+    assert parse_feed(payload, "6", DAY) == ()
+    with pytest.raises(FeedError):
+        parse_feed(payload, "4", DAY)
+
+
+def test_previous_deployed_price_schema_is_supported_during_upgrade():
+    document = json.loads(feed())
+    resource = document["data"][0]
+    resource["type"] = "fuelPrices"
+    item = resource["attributes"]
+    item["product"] = 1
+    item["price"]["perLitre"] = item["price"].pop("products")["1"]
+    assert parse_feed(json.dumps(document).encode(), "1", DAY) == parse_feed(feed(), "1", DAY)
 
 
 def test_duplicate_station_validation_is_atomic():
@@ -166,7 +180,8 @@ def test_snapshot_size_and_station_limits():
 
 class FakeResponse:
     def __init__(self, status=200, body=None, headers=None):
-        self.status, self.body, self.headers = status, body or feed(), headers or {}
+        self.status, self.body = status, body or feed()
+        self.headers = {"Content-Type": "application/vnd.api+json"} | (headers or {})
         self.content = self
 
     async def __aenter__(self):
@@ -266,3 +281,140 @@ async def test_oversized_http_response_is_rejected():
     client = FuelWatchClient(FakeSession([FakeResponse(body=b"x" * (MAX_RESPONSE + 1))]))
     with pytest.raises(FeedError, match="size"):
         await client.fetch("1", DAY)
+
+
+def enriched_feed():
+    document = json.loads(feed())
+    item = document["data"][0]["attributes"]
+    item.update(
+        tradingName="Example Trading Name",
+        phone="+61899811151",
+        is24Hours=False,
+        siteFeatures=["ATM", "Toilets"],
+        openHours={"Monday": "06:00-20:30"},
+        restrictions=["Membership Required"],
+        sourceNotes={"features": ["Unclassified feature"], "openHours": "Public holidays vary"},
+        enrichment={
+            "provider": "Google Maps",
+            "placeId": "place_123",
+            "stale": False,
+            "fetchedAt": "2026-09-28T12:00:00.000+08:00",
+            "fields": ["address.postcode", "phone"],
+            "googleMapsUri": "https://maps.google.com/?cid=123",
+            "attributions": [{"displayName": "Example provider", "uri": "https://example.com/"}],
+        },
+    )
+    item["address"]["postcode"] = "6000"
+    return json.dumps(document).encode()
+
+
+def test_station_details_and_attribution_survive_api_storage_and_entity_rows():
+    from datetime import datetime
+
+    from custom_components.fuelwatch_wa.engine import quote_row
+    from custom_components.fuelwatch_wa.models import Quote
+
+    quote = parse_feed(enriched_feed(), "1", DAY)[0]
+    restored = Quote.from_dict(json.loads(json.dumps(quote.to_dict())))
+    assert restored == quote
+    row = quote_row(restored, [], datetime.fromisoformat("2026-09-29T12:00:00+08:00"))
+    assert row["postcode"] == "6000"
+    assert row["trading_name"] == "Example Trading Name"
+    assert row["phone"] == "+61899811151"
+    assert row["site_features"] == ["ATM", "Toilets"]
+    assert row["open_hours"] == {"Monday": "06:00-20:30"}
+    assert row["restrictions"] == ["Membership Required"]
+    assert row["source_notes"]["open_hours"] == "Public holidays vary"
+    assert row["enrichment"]["provider"] == "Google Maps"
+    assert row["enrichment"]["attributions"][0]["uri"] == "https://example.com/"
+
+
+async def test_conditional_requests_reuse_validated_snapshot_and_original_provenance():
+    from custom_components.fuelwatch_wa.api import FuelWatchClient
+
+    session = FakeSession(
+        [FakeResponse(body=enriched_feed(), headers={"ETag": '"one"'}), FakeResponse(304)]
+    )
+    client = FuelWatchClient(session)
+    first = await client.fetch_snapshot("1", DAY)
+    second = await client.fetch_snapshot("1", DAY)
+    assert second == first
+    assert second.fetched_at.isoformat() == "2026-09-29T16:00:00+08:00"
+    assert second.source == "fuelwatch.wa.gov.au"
+    assert session.calls[1][1]["headers"]["If-None-Match"] == '"one"'
+    assert second.quotes[0].price == Decimal("185.9")
+    await client.async_close()
+
+
+async def test_unsolicited_304_and_wrong_media_type_are_rejected():
+    from custom_components.fuelwatch_wa.api import FuelWatchClient
+
+    for response in [FakeResponse(304), FakeResponse(headers={"Content-Type": "text/html"})]:
+        with pytest.raises(FeedError):
+            await FuelWatchClient(FakeSession([response])).fetch("1", DAY)
+
+
+def test_unknown_or_missing_source_is_rejected():
+    with pytest.raises(FeedError):
+        parse_feed(change(source="unknown.example"), "1", DAY)
+
+
+@pytest.mark.parametrize(
+    "prices",
+    [
+        {},
+        {"1": None},
+        {"1": True},
+        {"1": "195.0"},
+        {"1": -1},
+        {"999": 200},
+        {"1": 185.9, "2": 200},
+        [],
+    ],
+)
+def test_invalid_grouped_prices_reject_entire_snapshot(prices):
+    document = json.loads(feed())
+    document["data"][0]["attributes"]["price"]["products"] = prices
+    with pytest.raises(FeedError):
+        parse_feed(json.dumps(document).encode(), "1", DAY)
+
+
+def test_old_saved_quotes_without_station_details_remain_loadable():
+    from custom_components.fuelwatch_wa.models import Quote
+
+    original = parse_feed(feed(), "1", DAY)[0]
+    saved = original.to_dict()
+    saved.pop("details")
+    restored = Quote.from_dict(saved)
+    assert restored.station_id == original.station_id
+    assert restored.price == original.price
+    assert restored.details.site_features == ()
+
+
+async def test_cancelled_caller_does_not_cancel_another_consumers_shared_fetch():
+    import asyncio
+
+    from custom_components.fuelwatch_wa.api import FuelWatchClient
+
+    started, release = asyncio.Event(), asyncio.Event()
+
+    class SlowResponse(FakeResponse):
+        async def __aenter__(self):
+            started.set()
+            await release.wait()
+            return self
+
+    session = FakeSession([SlowResponse()])
+    client = FuelWatchClient(session)
+    first = asyncio.create_task(client.fetch_snapshot("1", DAY))
+    await started.wait()
+    second = asyncio.create_task(client.fetch_snapshot("1", DAY))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    release.set()
+    assert (await second).quotes[0].price == Decimal("185.9")
+    assert session.requests == 1
+    await client.async_close()
+    assert not client._inflight

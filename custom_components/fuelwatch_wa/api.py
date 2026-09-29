@@ -11,9 +11,10 @@ from hashlib import sha256
 
 import aiohttp
 
-from .const import FEED_URL, MAX_RESPONSE, MAX_STATIONS, PERTH, PRODUCTS
+from .const import FEED_SOURCE, FEED_URL, MAX_RESPONSE, MAX_STATIONS, PERTH, PRODUCTS, VERSION
 from .engine import decimal
-from .models import Quote
+from .models import FeedSnapshot, Quote
+from .station import StationDetails
 
 
 class FeedError(Exception):
@@ -49,6 +50,11 @@ def _timestamp(value: object) -> datetime:
 
 
 def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote, ...]:
+    """Compatibility helper for consumers that only need validated quotes."""
+    return parse_snapshot(payload, product, expected_date).quotes
+
+
+def parse_snapshot(payload: bytes, product: str, expected_date: date) -> FeedSnapshot:
     """Validate a complete product/period snapshot before replacing cached data."""
     if product not in PRODUCTS or len(payload) > MAX_RESPONSE:
         raise FeedError("Unsupported product or oversized response")
@@ -59,10 +65,22 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
             raise ValueError("Expected a JSON object")
         if "errors" in document:
             raise ValueError("Upstream returned an error document")
+        if document.get("jsonapi") != {"version": "1.1"}:
+            raise ValueError("Unexpected JSON:API version")
         metadata = document.get("meta")
         if not isinstance(metadata, dict):
             raise ValueError("Expected snapshot metadata")
-        if type(metadata.get("product")) is not int or metadata["product"] != int(product):
+        if metadata.get("source") != FEED_SOURCE:
+            raise ValueError("Unexpected price source")
+        selected = metadata.get("products", [metadata.get("product")])
+        if (
+            not isinstance(selected, list)
+            or not selected
+            or any(type(value) is not int or str(value) not in PRODUCTS for value in selected)
+            or len(set(selected)) != len(selected)
+            or int(product) not in selected
+            or ("product" in metadata and "products" in metadata)
+        ):
             raise ValueError("Unexpected product")
         if metadata.get("sourceDate") != expected_date.isoformat():
             raise ValueError("Unexpected snapshot date")
@@ -71,7 +89,7 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
             metadata.get("validUntil")
         ) != valid_from + timedelta(days=1):
             raise ValueError("Unexpected price validity window")
-        _timestamp(metadata.get("fetchedAt"))
+        fetched_at = _timestamp(metadata.get("fetchedAt")).astimezone(PERTH)
         items = document.get("data")
         if not isinstance(items, list) or len(items) > MAX_STATIONS:
             raise ValueError("Invalid station list")
@@ -83,7 +101,10 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
         quotes = {}
         resource_ids: set[str] = set()
         for resource in items:
-            if not isinstance(resource, dict) or resource.get("type") != "fuelPrices":
+            if not isinstance(resource, dict) or resource.get("type") not in (
+                "serviceStation",
+                "fuelPrices",
+            ):
                 raise ValueError("Invalid price resource")
             resource_id = resource.get("id")
             if (
@@ -97,8 +118,6 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
             item = resource.get("attributes")
             if not isinstance(item, dict):
                 raise ValueError("Expected resource attributes")
-            if type(item.get("product")) is not int or item["product"] != int(product):
-                raise ValueError("Unexpected quote product")
 
             def field(name: str, required: bool = True, source: dict | None = None) -> str:
                 value = (item if source is None else source).get(name, "")
@@ -113,10 +132,33 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
             address_fields = item.get("address")
             if not isinstance(price, dict) or not isinstance(address_fields, dict):
                 raise ValueError("Expected structured price and address")
+            if resource["type"] == "serviceStation":
+                prices = price.get("products")
+                if (
+                    not isinstance(prices, dict)
+                    or not prices
+                    or "perLitre" in price
+                    or "product" in item
+                ):
+                    raise ValueError("Invalid grouped prices")
+                for code, value in prices.items():
+                    if code not in PRODUCTS or int(code) not in selected:
+                        raise ValueError("Unexpected quote product")
+                    if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
+                        raise ValueError("Expected a JSON number")
+                    decimal(value, minimum="0.001", maximum=10000)
+                per_litre = prices.get(product)
+            else:
+                # Permit the previous deployed representation during a rolling worker/HA upgrade.
+                if type(item.get("product")) is not int or item["product"] != int(product):
+                    raise ValueError("Unexpected quote product")
+                per_litre = price.get("perLitre")
+                if isinstance(per_litre, bool) or not isinstance(per_litre, (int, Decimal)):
+                    raise ValueError("Expected a JSON number")
             as_at = _timestamp(price.get("asAt"))
             if as_at != valid_from:
                 raise ValueError("Unexpected quote date")
-            for value in (item.get("latitude"), item.get("longitude"), price.get("perLitre")):
+            for value in (item.get("latitude"), item.get("longitude")):
                 if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
                     raise ValueError("Expected a JSON number")
             latitude = float(decimal(item["latitude"], minimum=-90, maximum=90))
@@ -127,6 +169,10 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
             )
             if address_fields.get("state") != "WA":
                 raise ValueError("Unexpected address state")
+            details = StationDetails.from_api(item)
+            if per_litre is None:
+                # A station may sell only some of the selected fuels; missing means unavailable.
+                continue
             # Neighbouring sites can share an address in the real feed. Include
             # coordinates, keeping identity independent of price and rebranding.
             station_id = _station_id(address, suburb, latitude, longitude)
@@ -134,18 +180,21 @@ def parse_feed(payload: bytes, product: str, expected_date: date) -> tuple[Quote
                 station_id=station_id,
                 product=product,
                 day=expected_date,
-                price=decimal(price["perLitre"], minimum="0.001", maximum=10000),
+                price=decimal(per_litre, minimum="0.001", maximum=10000),
                 name=field("name"),
                 brand=field("brand", False) or "Independent",
                 address=address,
                 suburb=suburb,
                 latitude=latitude,
                 longitude=longitude,
+                details=details,
             )
             if station_id in quotes and quotes[station_id] != quote:
                 raise ValueError("Conflicting station identity")
             quotes[station_id] = quote
-        return tuple(quotes.values())
+        return FeedSnapshot(
+            tuple(quotes.values()), product, expected_date, FEED_SOURCE, fetched_at, status
+        )
     except Exception as err:
         raise FeedError(f"Invalid FuelWatch response: {type(err).__name__}") from err
 
@@ -160,7 +209,8 @@ class FuelWatchClient:
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
         self._semaphore = asyncio.Semaphore(2)
-        self._inflight = {}
+        self._inflight: dict[tuple[str, date], asyncio.Task[FeedSnapshot]] = {}
+        self._responses: dict[tuple[str, date], tuple[str, FeedSnapshot]] = {}
         self._legacy_station_ids: dict[str, str] = {}
 
     def restore_station_identity(self, quote: Quote) -> None:
@@ -185,11 +235,23 @@ class FuelWatchClient:
         )
 
     async def fetch(self, product: str, day: date) -> tuple[Quote, ...]:
+        """Return quotes while retaining compatibility with existing internal callers."""
+        return (await self.fetch_snapshot(product, day)).quotes
+
+    async def fetch_snapshot(self, product: str, day: date) -> FeedSnapshot:
+        """Share in-flight requests and preserve the worker's original fetchedAt on cache hits."""
         key = (product, day)
         if key not in self._inflight:
             task = asyncio.create_task(self._fetch(product, day))
             self._inflight[key] = task
-            task.add_done_callback(lambda done: self._inflight.pop(key, None))
+
+            def completed(done):
+                self._inflight.pop(key, None)
+                # A shielded fetch may outlive every caller; always retrieve its exception.
+                if not done.cancelled():
+                    done.exception()
+
+            task.add_done_callback(completed)
         return await asyncio.shield(self._inflight[key])
 
     async def async_close(self):
@@ -197,11 +259,13 @@ class FuelWatchClient:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        self._responses.clear()
 
-    async def _fetch(self, product: str, day: date) -> tuple[Quote, ...]:
+    async def _fetch(self, product: str, day: date) -> FeedSnapshot:
         if product not in PRODUCTS:
             raise FeedError("Unsupported product")
         async with self._semaphore:
+            cached = self._responses.get((product, day))
             for attempt in range(3):
                 delay = 2**attempt + random.random()
                 try:
@@ -214,10 +278,15 @@ class FuelWatchClient:
                         timeout=aiohttp.ClientTimeout(total=25),
                         headers={
                             "Accept": "application/vnd.api+json",
-                            "User-Agent": "FuelWatch-WA-Plus/0.1 HomeAssistant",
+                            "User-Agent": f"FuelWatch-WA/{VERSION} HomeAssistant",
+                            **({"If-None-Match": cached[0]} if cached else {}),
                         },
                         allow_redirects=False,
                     ) as response:
+                        if response.status == 304:
+                            if cached is None:
+                                raise FeedError("FuelWatch returned 304 without a cached snapshot")
+                            return cached[1]
                         if response.status == 429 or 500 <= response.status < 600:
                             retry = response.headers.get("Retry-After", "")
                             if re.fullmatch(r"\d{1,6}", retry):
@@ -227,19 +296,37 @@ class FuelWatchClient:
                             raise aiohttp.ClientConnectionError(f"Temporary HTTP {response.status}")
                         if response.status != 200:
                             raise FeedError(f"FuelWatch HTTP {response.status}")
+                        if (
+                            response.headers.get("Content-Type", "")
+                            .split(";", 1)[0]
+                            .strip()
+                            .lower()
+                            != "application/vnd.api+json"
+                        ):
+                            raise FeedError("FuelWatch returned an unexpected response media type")
                         data = bytearray()
                         async for chunk in response.content.iter_chunked(65536):
                             data.extend(chunk)
                             if len(data) > MAX_RESPONSE:
                                 raise FeedError("FuelWatch response exceeds size limit")
-                        quotes = parse_feed(bytes(data), product, day)
+                        snapshot = parse_snapshot(bytes(data), product, day)
                         aliases = {new: old for old, new in self._legacy_station_ids.items()}
-                        return tuple(
+                        quotes = tuple(
                             replace(quote, station_id=aliases[quote.station_id])
                             if quote.station_id in aliases
                             else quote
-                            for quote in quotes
+                            for quote in snapshot.quotes
                         )
+                        snapshot = replace(snapshot, quotes=quotes)
+                        etag = response.headers.get("ETag")
+                        if etag and len(etag) <= 200:
+                            self._responses[(product, day)] = (etag, snapshot)
+                            # Retain a small number of periods, independent of time spent running HA.
+                            while len(self._responses) > 28:
+                                self._responses.pop(next(iter(self._responses)))
+                        else:
+                            self._responses.pop((product, day), None)
+                        return snapshot
                 except (aiohttp.ClientError, TimeoutError) as err:
                     if attempt == 2:
                         raise FeedError(

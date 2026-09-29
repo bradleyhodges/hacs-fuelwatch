@@ -27,7 +27,7 @@ From the repository root, `python tools/test_api_adapter.py` runs the real Pytho
 
 ## HTTP contract
 
-- `GET /v1`: JSON:API 1.1 price resources described below; used by Home Assistant.
+- `GET /v1`: JSON:API 1.1 service-station resources described below; used by Home Assistant.
 - `GET /legacy`: legacy `{ "feed": ... }` representation retaining RSS descriptions and parser fields.
 - `GET /`: redirects to `/v1`, retaining query parameters.
 - `HEAD`: the same status and headers as GET, without a response body; shares its cache entry.
@@ -39,7 +39,7 @@ JSON:API reserves all-lowercase custom top-level query names. Retaining short al
 
 | Parameter | Accepted values | Default |
 | --- | --- | --- |
-| `Product` | One or more of `1`, `2`, `4`, `5`, `6`, `10`, `11`, comma-separated | `1` |
+| `Product` | One or more of `1`, `2`, `4`, `5`, `6`, `10`, `11`, comma-separated | All seven on `/v1`; `1` on `/legacy` |
 | `Day` | `yesterday`, `today`, `tomorrow`, or `DD/MM/YYYY` within those three Perth calendar dates | `today` |
 | `Suburb` | Comma-separated suburb names; each nonempty, at most 100 characters and without control characters | All suburbs |
 | `Region` | Comma-separated region codes exported in `src/fuelwatch.ts` | All regions |
@@ -55,13 +55,17 @@ curl 'https://fuelwatch.oss.bhodges.me/v1?brand=2,35&product=1,2,6&day=TODAY'
 
 `/v1` responds with `Content-Type: application/vnd.api+json` without a charset parameter. Send that type in `Accept`, or omit `Accept`/use a compatible wildcard. Unsupported extension/media parameters yield 406 (`Accept`) or 415 (`Content-Type`) before any cache read. Unknown profiles are ignored. `Vary: Accept` is included; HEAD and conditional requests obey the same negotiation rules.
 
-The document has three top-level members: `jsonapi: {"version":"1.1"}`, `meta` and `data`. `meta.source` identifies the original fuel-price publisher as `fuelwatch.wa.gov.au`. `meta` also retains `sourceDate`, `fetchedAt`, `validFrom`, `validUntil` and `publicationStatus`. A single fuel has numeric `meta.product`; multiple fuels have `meta.products: [1, 2, 6]`. Every resource is `{ "type": "fuelPrices", "id": "...", "attributes": { ... } }`, with a numeric `attributes.product` even for single-product requests. A station selling three requested fuels appears once per station/product pair. Resource IDs combine source date, product and a SHA-256 hash of FuelWatch station identity; rebranding, price corrections and enrichment updates retain the ID. There are no advertised resource URLs that the worker cannot serve.
+The document has three top-level members: `jsonapi: {"version":"1.1"}`, `meta` and `data`. `meta.source` identifies the original fuel-price publisher as `fuelwatch.wa.gov.au`. `meta` also retains `sourceDate`, `fetchedAt`, `validFrom`, `validUntil` and `publicationStatus`. A single fuel has numeric `meta.product`; multiple fuels have `meta.products: [1, 2, 6]`. Every resource is `{ "type": "serviceStation", "id": "...", "attributes": { ... } }`. A station appears once, with `price.products` mapping product IDs to numeric prices. Products that station does not sell are omitted, never represented as zero. Even a single-product selection uses this grouped shape. Resource IDs combine source date and a SHA-256 hash of FuelWatch station identity; changing the selected products, rebranding, price corrections and enrichment updates retain the ID. There are no advertised resource URLs that the worker cannot serve.
 
 RSS `title`, `image`, `description`, parser fields and the old `schemaVersion` are absent from `/v1`. Station attributes use camelCase, including `tradingName`, `siteFeatures`, `openHours` and `sourceNotes`. Enrichment field paths use these same names.
 
 All `/v1` JSON timestamps and the `X-FuelWatch-Fetched-At` header are serialized in **AWST (`+08:00`)**, including enrichment timestamps. `sourceDate` is a date-only calendar value. Opening hours are local AWST wall times. Internal D1 expiry/budget accounting remains independent of display formatting; HTTP protocol dates retain their required HTTP-date format.
 
-FuelWatch silently ignores unsupported comma lists, so the worker expands them into at most **24 product/brand/region/suburb combinations**. Larger selections return HTTP 400 with instructions to split them. A cache miss fetches at most three feeds concurrently within a shared eight-second deadline, including queued work and retries. All components must succeed and validate; failures or conflicting duplicate quotes reject the entire response without caching partial results. Overlaps deduplicate by station and product, with combined output sorted by product, price and identity. Combined input is limited to 16 MiB and output to 10,000 quotes. Channel metadata from an individual location is omitted when merging feeds.
+FuelWatch requires one explicit product ID per RSS request; omitting it upstream selects only unleaded. `/v1` selects all seven products when its product filter is omitted. The worker maintains complete per-product/date extracts in the existing D1 cache. Brand and exact-suburb (`surrounding=no`) filters are evaluated against these extracts, so changing them does not trigger new RSS requests. Brand codes map to the source labels in `src/fuelwatch.ts`; matching is case-insensitive.
+
+RSS records do not include region membership or the surrounding-suburb relationship. Region searches, suburb searches using the origin's default surrounding behavior, and `surrounding=yes` therefore retain source-side filtering and the existing six-hour selection cache. Those searches and `/legacy` expand into at most **24 product/brand/region/suburb combinations**; larger selections return HTTP 400. Catalogue selections need at most seven upstream requests, regardless of brand/exact-suburb combinations.
+
+A cold selection uses at most three concurrent origin requests and a shared eight-second deadline. All components must succeed and validate; errors reject the entire public response. Successfully validated individual product extracts remain available if another product fails. Overlaps deduplicate by station/product before grouping into station resources; ordering is deterministic. Source-filtered combined input is bounded to 16 MiB; each catalogue product is bounded to 4 MiB, with all selections capped at 10,000 quotes.
 
 `publicationStatus` is `available` for a nonempty snapshot, `not_yet_published` for an empty tomorrow snapshot before 14:30 Perth, and `empty` for other valid empty results. Price periods run from 06:00 Perth on the source date to 06:00 the next day. Before 06:00, request yesterday for the currently effective price period. An explicit request for an expired period may return validated historical prices with `no-store`; its metadata retains the actual validity dates.
 
@@ -85,14 +89,16 @@ Example document:
     },
     "data": [
         {
-            "type": "fuelPrices",
-            "id": "2026-09-29:1:238232d151f5f92bbce32951b828cb7fe4887fdc1ac868628c7ab33d4eda4e3b",
+            "type": "serviceStation",
+            "id": "2026-09-29:238232d151f5f92bbce32951b828cb7fe4887fdc1ac868628c7ab33d4eda4e3b",
             "attributes": {
                 "name": "Example Station",
                 "brand": "Example",
                 "price": {
-                    "perLitre": 185.9,
-                    "asAt": "2026-09-29T06:00:00.000+08:00"
+                    "asAt": "2026-09-29T06:00:00.000+08:00",
+                    "products": {
+                        "1": 185.9
+                    }
                 },
                 "address": {
                     "street": "1 Test Road",
@@ -106,15 +112,14 @@ Example document:
                 "is24Hours": null,
                 "restrictions": null,
                 "tradingName": "Example Station",
-                "siteFeatures": [],
-                "product": 1
+                "siteFeatures": []
             }
         }
     ]
 }
 ```
 
-`price.perLitre` is a JSON **number in Australian cents per litre** (185.9 means AUD 1.859/L). `price.asAt` is the start of the source price period at 06:00 AWST, matching `meta.validFrom`; it is not a retrieval timestamp. Consumers needing decimal arithmetic should parse JSON numbers as decimals, as the Python adapter does. Coordinates are numbers; postcodes stay strings. Google never changes FuelWatch prices, coordinates, names, brands, streets or suburbs. Missing postcodes are `null` until a confident place match supplies one; example data is never used as a lookup database.
+Each value in `price.products` is a JSON **number in Australian cents per litre** (185.9 means AUD 1.859/L). `price.asAt` is the start of the source price period at 06:00 AWST, matching `meta.validFrom`; it is not a retrieval timestamp. Consumers needing decimal arithmetic should parse JSON numbers as decimals, as the Python adapter does. Coordinates are numbers; postcodes stay strings. Google never changes FuelWatch prices, coordinates, names, brands, streets or suburbs. Missing postcodes are `null` until a confident place match supplies one; example data is never used as a lookup database.
 
 Phone parsing uses `libphonenumber-js` with the Australian default region, strict whole-value parsing and validity checks. Invalid/ambiguous numbers produce `phone: null` and retain the original text in `sourceNotes.phone`; an explicitly supplied invalid number blocks Google replacement. Empty fields and FuelWatch's `--EMPTY--` marker permit a fallback. Extensions and lists of numbers are not silently discarded to invent a canonical number.
 
@@ -122,7 +127,7 @@ Opening hours use local Perth wall times: `HH:mm-HH:mm`, comma-separated split s
 
 `siteFeatures` and `restrictions` use the exact labels exported by `FEATURES` and `RESTRICTIONS` in `src/station.ts`. Order is deterministic and duplicates are removed. Features include Fuel Cards, ATM, Toilets, Bottled Gas, Trailer Hire, EFTPOS, Restaurant, Carwash, Workshop, Air, Water, Ice, Discount, Voucher, Bottled AdBlue, Pumped AdBlue, Truck Friendly, Convenience Store, Credit Cards, Debit Cards and Open 24 hours. Restrictions are Unmanned site (credit card charges may apply), Entry Permit Required, Membership Required and Low Aromatic Fuel. Unknown text is preserved separately in `sourceNotes.features` or `sourceNotes.restrictions`; it never silently enters the controlled vocabulary. Empty features are `[]`; no known restrictions is `null`.
 
-Google can add explicitly reported facilities and supply missing phone/postcode/hours. Existing FuelWatch hours win per weekday, including explicit closed days. A station with FuelWatch's `Open 24 hours` cannot acquire a narrower Google schedule. Added fields carry `enrichment` metadata: provider, place ID, fetched timestamp, stale flag, affected field names, Google Maps URL and third-party attributions. Consumers displaying these fields should retain the accompanying attribution. The Home Assistant price adapter currently consumes the FuelWatch-owned price and identity fields only.
+Google can add explicitly reported facilities and supply missing phone/postcode/hours. Existing FuelWatch hours win per weekday, including explicit closed days. A station with FuelWatch's `Open 24 hours` cannot acquire a narrower Google schedule. Added fields carry `enrichment` metadata: provider, place ID, fetched timestamp, stale flag, affected field names, Google Maps URL and third-party attributions. Consumers displaying these fields should retain the accompanying attribution. The Home Assistant adapter retains station details and attribution in its saved snapshots, entity attributes and dashboard.
 
 Whole snapshots are rejected for invalid prices, coordinates, dates, missing station identity fields, conflicting records at the same address/coordinates, unsafe or malformed XML, duplicate scalar XML fields, over 5,000 stations or decompressed input over 4 MiB. Identical duplicate records are collapsed.
 
@@ -139,7 +144,7 @@ JSON:API errors use `{ "jsonapi": { "version": "1.1" }, "errors": [{ "status": "
 
 ## Freshness and failure handling
 
-Published selections are cached in **D1 for six hours (21,600 seconds)** from the completed origin fetch. All users and Cloudflare data centers share this snapshot, including `/v1` and `/legacy`. Cache identity includes the configured origin, absolute source date and normalized filters, so casing, parameter order, list order and `filter[...]` aliases reuse the same snapshot. Hits preserve `meta.fetchedAt` and never extend the expiry. Distinct selections have distinct entries; overlapping selections are not a global copy of the entire station catalog.
+Published selections are cached in **D1 for six hours (21,600 seconds)** from the completed origin fetch. All users and Cloudflare data centers share this snapshot, including `/v1` and `/legacy`. Cache identity includes the configured origin, absolute source date and normalized filters, so casing, parameter order, list order and `filter[...]` aliases reuse the same snapshot. Hits preserve `meta.fetchedAt` and never extend the expiry. The `/v1` catalogue shares one complete extract per product/date across all supported local filters. Source-filtered selections and `/legacy` still have distinct entries. Combined responses report the oldest contributing `fetchedAt` and the earliest expiry.
 
 The local Cache API holds the rendered response for up to the snapshot's remaining six-hour lifetime. HTTP freshness stops earlier at Perth midnight (relative `day` URLs change meaning), price expiry or an enrichment deadline. Rebuilding a response after edge eviction or enrichment expiry still uses D1 without calling FuelWatch. A cached `tomorrow` snapshot can become `today` at midnight because its source date is unchanged. Already published results do not need invalidation at 06:00 or 14:30. Empty results, and multi-product selections missing any requested fuel, are cached for at most **30 seconds**, shortened at publication/day boundaries. This prevents an early request from hiding newly published prices. Browser responses require revalidation (`max-age=0`); shared HTTP caches receive only the remaining `s-maxage`. ETags support conditional GET and HEAD.
 
@@ -149,17 +154,19 @@ On a shared miss, a 60-second SQL lease elects one origin fetcher. Other callers
 
 One eight-second deadline covers upstream headers, streaming body reads and retry delay. Network failures, 429 and 5xx responses allow at most one retry with jitter. A long `Retry-After` returns immediately rather than holding a worker open. Redirects and validation failures are not retried. Origin cookies, cache headers and XML ETags are not forwarded.
 
-Arbitrary suburb queries can create many distinct selections. Monitor D1 storage, rows read/written and unique-query traffic before adding Cloudflare rate-limiting rules. The existing 15-minute enrichment discovery cron continues independently of the hourly price refresh.
+Source-filtered region/surrounding-suburb queries can create many distinct selections. Monitor D1 storage, rows read/written and unique-query traffic before adding Cloudflare rate-limiting rules. The existing 15-minute enrichment discovery cron continues independently of the hourly price refresh.
 
 ### Hourly price refresh
 
-The `0 * * * *` cron refreshes all seven unfiltered single-product selections at the start of every hour, every day. Cloudflare evaluates cron in UTC; this expression is also hourly at minute zero in AWST. Before 06:00 AWST it refreshes yesterday and today; from 06:00 until 14:30 it refreshes today; after 14:30 it includes tomorrow. This warms the exact absolute-date cache keys requested by Home Assistant, even when nobody has requested them yet. Arbitrary brand/region/suburb combinations are still filled on demand.
+The `0 * * * *` cron refreshes all seven unfiltered single-product selections at the start of every hour, every day. Cloudflare evaluates cron in UTC; this expression is also hourly at minute zero in AWST. Before 06:00 AWST it refreshes yesterday and today; from 06:00 until 14:30 it refreshes today; after 14:30 it includes tomorrow. This warms the exact absolute-date cache keys requested by Home Assistant, even when nobody has requested them yet. Every catalogue selection, including all-products requests and brand/exact-suburb changes, reuses these extracts. Source-filtered region/surrounding-suburb combinations are filled on demand.
 
 The job refreshes D1 even while a previous snapshot is fresh, with at most three concurrent origin requests. Public readers continue using the previous valid snapshot during refresh. Scheduled delivery retries reuse snapshots fetched since that event's scheduled time. Failed or unexpectedly empty replacements keep the existing prices and their original expiry; successful refreshes start a new six-hour lifetime. Existing rendered edge responses retain their bounded lifetime and may show older same-period prices until they expire. The cron warms shared D1, not every edge data center.
 
 Price warming runs without Google credentials or enrichment budget. `feeds_warmed` logs the AWST scheduled time, refreshed/reused/empty/failed counts and duration. `feed_warm_failed` identifies each failed product/day; other selections still run, then the cron invocation fails visibly if any refresh failed. Deploy the worker to register the new hourly trigger alongside `*/15 * * * *` for enrichment. The existing D1 migration suffices; no new tables or API keys are needed.
 
 ## Deploy and operate
+
+Install the updated Home Assistant integration before deploying this Worker. Its adapter accepts both the previous `fuelPrices` and new `serviceStation` resources; older integration versions cannot parse grouped prices. The new edge-cache namespace prevents cached old response documents from leaking into the new contract after deployment.
 
 Authenticate Wrangler to the Cloudflare account containing the `bhodges.me` zone. `wrangler.jsonc` binds the existing `fuelwatch` D1 database as `FUELWATCH_DB`. Apply the migration before deploying:
 

@@ -12,22 +12,27 @@ import {
 /** JSON:API forbids adding charset to this media type. No extensions or profiles are applied. */
 export const JSON_API_MEDIA_TYPE = "application/vnd.api+json";
 
-/** One immutable station/product/date identity; a corrected price updates this same resource. */
-export interface FuelPriceResource {
-    type: "fuelPrices";
+/** One station/date identity, independent of the products selected by the caller. */
+export interface ServiceStationResource {
+    type: "serviceStation";
     id: string;
-    attributes: Station & { product: FuelWatchProductId };
+    attributes: Omit<Station, "price"> & {
+        price: {
+            asAt: string;
+            products: Partial<Record<FuelWatchProductId, number>>;
+        };
+    };
 }
 
 /** JSON:API collection document; upstream RSS channel fields never cross this boundary. */
 export interface FuelPriceDocument {
     jsonapi: { version: "1.1" };
     meta: FeedMetadata;
-    data: FuelPriceResource[];
+    data: ServiceStationResource[];
 }
 
 /**
- * Build JSON:API resources using FuelWatch-owned identity, fuel and date rather than provider IDs.
+ * Group all selected products into one JSON:API serviceStation resource per station/date.
  * @remarks Hash each station only once per document, even when several requested fuels share it.
  * Names, brands, prices and enrichment updates do not change resource IDs. The existing integration
  * continues deriving its station selector separately so saved user selections survive this API change.
@@ -38,28 +43,34 @@ export async function jsonApiDocument(
     profiles: ReadonlyMap<string, StationEnrichment> = new Map(),
     now = Date.now(),
 ): Promise<FuelPriceDocument> {
-    const identities = new Map<string, Promise<string>>();
+    const stations = new Map<string, ServiceStationResource["attributes"]>();
+    // Product order, rather than asynchronous fetch completion, chooses the station's source fields.
+    for (const item of [...feed.items].sort((a, b) => a.product - b.product)) {
+        const key = stationKey(item);
+        let attributes = stations.get(key);
+        if (!attributes) {
+            const station = normaliseStation(item, profiles.get(key), now);
+            attributes = {
+                ...station,
+                price: { asAt: station.price.asAt, products: {} },
+            };
+            stations.set(key, attributes);
+        }
+        attributes.price.products[item.product] = Number(item.price);
+    }
     const data = await Promise.all(
-        feed.items.map(async (item) => {
-            const key = stationKey(item);
-            let identity = identities.get(key);
-            if (!identity) {
-                identity = crypto.subtle
-                    .digest("SHA-256", new TextEncoder().encode(key))
-                    .then((hash) =>
-                        Array.from(new Uint8Array(hash), (byte) =>
-                            byte.toString(16).padStart(2, "0"),
-                        ).join(""),
-                    );
-                identities.set(key, identity);
-            }
+        [...stations].map(async ([key, attributes]) => {
+            const identity = await crypto.subtle
+                .digest("SHA-256", new TextEncoder().encode(key))
+                .then((hash) =>
+                    Array.from(new Uint8Array(hash), (byte) =>
+                        byte.toString(16).padStart(2, "0"),
+                    ).join(""),
+                );
             return {
-                type: "fuelPrices" as const,
-                id: `${meta.sourceDate}:${item.product}:${await identity}`,
-                attributes: {
-                    ...normaliseStation(item, profiles.get(key), now),
-                    product: item.product,
-                },
+                type: "serviceStation" as const,
+                id: `${meta.sourceDate}:${identity}`,
+                attributes,
             };
         }),
     );

@@ -30,6 +30,7 @@ class FuelWatchCoordinator(DataUpdateCoordinator[dict]):
         self.store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
         self.snapshots = {}
         self.fetched = {}
+        self.source_metadata = {}
         self.errors = {}
         self.catalogue = {}
         self.manual_levels = {}
@@ -116,6 +117,22 @@ class FuelWatchCoordinator(DataUpdateCoordinator[dict]):
                         )
                     },
                 )
+        # Metadata is diagnostic; validate separately so old installations keep their saved quotes.
+        metadata = saved.get("source_metadata", {})
+        if isinstance(metadata, dict):
+            for key, value in metadata.items():
+                if (
+                    key in self.snapshots
+                    and isinstance(value, dict)
+                    and value.get("source") == "fuelwatch.wa.gov.au"
+                ):
+                    self.source_metadata[key] = {
+                        k: v
+                        for k, v in value.items()
+                        if k
+                        in ("source", "product", "source_date", "fetched_at", "publication_status")
+                        and isinstance(v, str)
+                    }
         self._prune()
 
     def _prune(self):
@@ -125,6 +142,7 @@ class FuelWatchCoordinator(DataUpdateCoordinator[dict]):
                 self.snapshots.pop(key, None)
                 self.fetched.pop(key, None)
                 self.errors.pop(key, None)
+                self.source_metadata.pop(key, None)
 
     async def async_save(self):
         await self.store.async_save(
@@ -133,6 +151,7 @@ class FuelWatchCoordinator(DataUpdateCoordinator[dict]):
                     key: [q.to_dict() for q in rows] for key, rows in self.snapshots.items()
                 },
                 "fetched": self.fetched,
+                "source_metadata": self.source_metadata,
                 "catalogue": self.catalogue,
                 "manual_levels": self.manual_levels,
             }
@@ -164,16 +183,27 @@ class FuelWatchCoordinator(DataUpdateCoordinator[dict]):
             async def fetch_one(product, day):
                 key = f"{product}/{day}"
                 try:
-                    rows = await self.client.fetch(product, day)
+                    snapshot = await self.client.fetch_snapshot(product, day)
                 except FeedError as err:
                     self.errors[key] = str(err)
                     return
+                rows = snapshot.quotes
                 # Client validates actual quote dates; do not mix product periods.
-                if any(q.product != product or q.day != day for q in rows):
+                if (
+                    snapshot.product != product
+                    or snapshot.source_date != day
+                    or any(q.product != product or q.day != day for q in rows)
+                ):
                     self.errors[key] = "Quote does not match requested product/date"
                     return
+                if not rows and self.snapshots.get(key):
+                    self.errors[key] = (
+                        "Published prices are temporarily unavailable; retaining the last snapshot"
+                    )
+                    return
                 self.snapshots[key] = rows
-                self.fetched[key] = now.isoformat()
+                self.fetched[key] = snapshot.fetched_at.astimezone(PERTH).isoformat()
+                self.source_metadata[key] = snapshot.metadata()
                 self.errors.pop(key, None)
                 for quote in rows:
                     old = self.catalogue.get(quote.station_id, {})
@@ -185,7 +215,7 @@ class FuelWatchCoordinator(DataUpdateCoordinator[dict]):
             self._prune()
             await self.async_save()
             self.views = {}
-            return {"updated": now.isoformat(), "errors": dict(self.errors)}
+            return {"updated": now.astimezone(PERTH).isoformat(), "errors": dict(self.errors)}
 
     async def async_shutdown(self):
         await self.client.async_close()
