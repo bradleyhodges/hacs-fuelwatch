@@ -18,6 +18,7 @@ import {
 import { parseQuery, perthTimestamp } from "./query";
 import { loadCachedSnapshot, pruneSnapshots } from "./snapshot-cache";
 import { normalisePhone } from "./station";
+import { HOURLY_CRON, warmSnapshots } from "./warm";
 
 /** Apply conditional/HEAD semantics and expose only the remaining shared-cache lifetime. */
 function deliver(
@@ -54,9 +55,13 @@ function deliver(
 }
 
 export default {
-    /** Refresh static station details separately from public requests and daily fuel prices. */
-    async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    /** Independent schedules keep price warming active even when Google enrichment is disabled. */
+    async scheduled(controller: ScheduledController, env: Env): Promise<void> {
         await pruneSnapshots(env.FUELWATCH_DB);
+        if (controller.cron === HOURLY_CRON) {
+            await warmSnapshots(env, controller.scheduledTime);
+            return;
+        }
         await refreshEnrichment(env);
     },
     /** Validate the complete upstream snapshot before publishing either public representation. */

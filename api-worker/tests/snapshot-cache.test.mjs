@@ -13,7 +13,7 @@ const output = fileURLToPath(
 await build({
     stdin: {
         contents:
-            'export * from "./src/snapshot-cache"; export * from "./src/query";',
+            'export * from "./src/snapshot-cache"; export * from "./src/query"; export * from "./src/warm";',
         resolveDir: fileURLToPath(new URL("..", import.meta.url)),
         loader: "ts",
     },
@@ -75,6 +75,99 @@ beforeEach(async () => {
 });
 afterEach(async () => {
     await worker.dispose();
+});
+
+test("hourly refresh replaces a fresh snapshot once per scheduled hour without blocking readers", async () => {
+    const first = await load();
+    now += 3600_000;
+    const refreshBefore = now;
+    origin = async () => {
+        const reader = await load();
+        assert.equal(reader.cacheStatus, "HIT");
+        assert.equal(reader.fetchedAt, first.fetchedAt);
+        return new Response(xml().replace("185.9", "199.9"));
+    };
+    const refreshed = await load("", { refreshBefore });
+    assert.equal(refreshed.cacheStatus, "MISS");
+    assert.equal(refreshed.feed.items[0].price, "199.9");
+    assert.equal(calls, 2);
+    assert.equal((await load("", { refreshBefore })).cacheStatus, "HIT");
+    assert.equal(calls, 2);
+});
+
+test("failed or unexpectedly empty hourly refreshes retain the published snapshot", async () => {
+    const first = await load();
+    now += 3600_000;
+    for (const body of [xml().replace("185.9", "bad"), xml("")]) {
+        origin = () => new Response(body);
+        await assert.rejects(load("", { refreshBefore: now }), {
+            code: "invalid_feed",
+        });
+        const retained = await load();
+        assert.equal(retained.fetchedAt, first.fetchedAt);
+        assert.deepEqual(retained.feed, first.feed);
+    }
+});
+
+test("hourly warming covers all fuels, respects AWST periods and bounds concurrency", async () => {
+    for (const [at, days] of [
+        ["2026-09-29T05:00:00+08:00", ["yesterday", "today"]],
+        ["2026-09-29T06:00:00+08:00", ["today"]],
+        ["2026-09-29T14:00:00+08:00", ["today"]],
+        ["2026-09-29T15:00:00+08:00", ["today", "tomorrow"]],
+    ]) {
+        now = Date.parse(at);
+        let active = 0;
+        let maximum = 0;
+        const fetched = [];
+        const env = { FUELWATCH_DB: db, FUELWATCH_URL: source };
+        const fetcher = async (url) => {
+            maximum = Math.max(maximum, ++active);
+            fetched.push(
+                `${url.searchParams.get("Product")}/${url.searchParams.get("Day")}`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            active--;
+            const date = {
+                yesterday: "2026-09-28",
+                today: "2026-09-29",
+                tomorrow: "2026-09-30",
+            }[url.searchParams.get("Day")];
+            return new Response(xml(item(date)));
+        };
+        await api.warmSnapshots(env, now, { clock: () => now, fetcher });
+        assert.equal(fetched.length, days.length * 7);
+        assert.ok(maximum <= 3);
+        for (const day of days)
+            for (const fuel of [1, 2, 4, 5, 6, 10, 11])
+                assert.ok(fetched.includes(`${fuel}/${day}`));
+        await api.warmSnapshots(env, now, { clock: () => now, fetcher });
+        assert.equal(fetched.length, days.length * 7);
+    }
+});
+
+test("hourly warming continues healthy products, reports failures and remains usable without Google", async () => {
+    const fetched = [];
+    await assert.rejects(
+        api.warmSnapshots({ FUELWATCH_DB: db, FUELWATCH_URL: source }, now, {
+            clock: () => now,
+            fetcher: async (url) => {
+                fetched.push(url.searchParams.get("Product"));
+                return new Response(
+                    xml().replace(
+                        "185.9",
+                        url.searchParams.get("Product") === "2"
+                            ? "bad"
+                            : "185.9",
+                    ),
+                );
+            },
+        }),
+        /failed for 1 selections/,
+    );
+    assert.equal(fetched.length, 7);
+    assert.equal((await load("product=4")).cacheStatus, "HIT");
+    assert.equal(calls, 0);
 });
 
 test("shared snapshots expire six hours after fetching, never six hours after reading", async () => {

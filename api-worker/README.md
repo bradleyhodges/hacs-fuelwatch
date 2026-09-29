@@ -149,7 +149,15 @@ On a shared miss, a 60-second SQL lease elects one origin fetcher. Other callers
 
 One eight-second deadline covers upstream headers, streaming body reads and retry delay. Network failures, 429 and 5xx responses allow at most one retry with jitter. A long `Retry-After` returns immediately rather than holding a worker open. Redirects and validation failures are not retried. Origin cookies, cache headers and XML ETags are not forwarded.
 
-Arbitrary suburb queries can create many distinct selections. Monitor D1 storage, rows read/written and unique-query traffic before adding Cloudflare rate-limiting rules. The existing 15-minute enrichment discovery cron continues its own bounded RSS discovery independently of the public response cache.
+Arbitrary suburb queries can create many distinct selections. Monitor D1 storage, rows read/written and unique-query traffic before adding Cloudflare rate-limiting rules. The existing 15-minute enrichment discovery cron continues independently of the hourly price refresh.
+
+### Hourly price refresh
+
+The `0 * * * *` cron refreshes all seven unfiltered single-product selections at the start of every hour, every day. Cloudflare evaluates cron in UTC; this expression is also hourly at minute zero in AWST. Before 06:00 AWST it refreshes yesterday and today; from 06:00 until 14:30 it refreshes today; after 14:30 it includes tomorrow. This warms the exact absolute-date cache keys requested by Home Assistant, even when nobody has requested them yet. Arbitrary brand/region/suburb combinations are still filled on demand.
+
+The job refreshes D1 even while a previous snapshot is fresh, with at most three concurrent origin requests. Public readers continue using the previous valid snapshot during refresh. Scheduled delivery retries reuse snapshots fetched since that event's scheduled time. Failed or unexpectedly empty replacements keep the existing prices and their original expiry; successful refreshes start a new six-hour lifetime. Existing rendered edge responses retain their bounded lifetime and may show older same-period prices until they expire. The cron warms shared D1, not every edge data center.
+
+Price warming runs without Google credentials or enrichment budget. `feeds_warmed` logs the AWST scheduled time, refreshed/reused/empty/failed counts and duration. `feed_warm_failed` identifies each failed product/day; other selections still run, then the cron invocation fails visibly if any refresh failed. Deploy the worker to register the new hourly trigger alongside `*/15 * * * *` for enrichment. The existing D1 migration suffices; no new tables or API keys are needed.
 
 ## Deploy and operate
 
@@ -229,6 +237,7 @@ ORDER BY next_attempt_at LIMIT 20;
 | `src/enrichment.ts` | D1 trust boundary, read deadline, discovery, lease, budget and retry state. |
 | `src/cache.ts`, `src/query.ts`, `src/upstream.ts` | Edge freshness, request validation and bounded origin transport. |
 | `src/snapshot-cache.ts` | Shared six-hour snapshots, D1 fill leases, compressed chunk publication and expiry cleanup. |
+| `src/warm.ts` | Hourly warming of all integration product/period selections, with isolated failures and bounded concurrency. |
 | `migrations/0001_station_enrichment.sql` | Station cache, scheduler lease and daily request-counter tables. |
 | `migrations/0002_feed_cache.sql` | Shared feed snapshots and cascading compressed payload chunks. |
 

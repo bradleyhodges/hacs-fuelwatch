@@ -147,6 +147,8 @@ export async function loadCachedSnapshot(
     options: Parameters<typeof loadSnapshot>[2] & {
         clock?: () => number;
         waitMs?: number;
+        /** Scheduled refresh cutoff; public callers omit this and use the normal six-hour lifetime. */
+        refreshBefore?: number;
     } = {},
 ): Promise<CachedSnapshot> {
     const clock = options.clock ?? Date.now;
@@ -176,21 +178,33 @@ export async function loadCachedSnapshot(
     const owner = crypto.randomUUID();
     const deadline = Date.now() + (options.waitMs ?? 10_000);
     let attempt = 0;
+    let previous: CachedSnapshot | undefined;
     try {
         for (;;) {
             options.signal?.throwIfAborted();
             const cached = await readSnapshot(db, key, clock());
-            if (cached && cached.expiresAt > clock()) return cached;
+            if (cached && cached.expiresAt > clock()) {
+                if (cached.fetchedAt >= (options.refreshBefore ?? 0))
+                    return cached;
+                previous = cached;
+            }
             const now = clock();
             const claimed = await database(
                 db
                     .prepare(`
                 INSERT INTO feed_cache(cache_key, owner, lease_until) VALUES (?, ?, ?)
                 ON CONFLICT(cache_key) DO UPDATE SET owner = excluded.owner, lease_until = excluded.lease_until
-                WHERE feed_cache.expires_at <= ? AND feed_cache.lease_until <= ?
+                WHERE (feed_cache.expires_at <= ? OR feed_cache.fetched_at < ?) AND feed_cache.lease_until <= ?
                 RETURNING cache_key
             `)
-                    .bind(key, owner, now + LEASE_MS, now, now)
+                    .bind(
+                        key,
+                        owner,
+                        now + LEASE_MS,
+                        now,
+                        options.refreshBefore ?? 0,
+                        now,
+                    )
                     .first(),
             );
             if (claimed) break;
@@ -222,6 +236,19 @@ export async function loadCachedSnapshot(
     }
     try {
         const snapshot = await fetchSnapshot();
+        // A transient empty response must not erase this period's already published prices.
+        // Keep the previous expiry unchanged: refresh failures never make old data fresh again.
+        if (
+            options.refreshBefore &&
+            previous?.feed.items.length &&
+            !snapshot.feed.items.length
+        ) {
+            throw new ApiError(
+                502,
+                "invalid_feed",
+                "FuelWatch returned an empty replacement for published prices.",
+            );
+        }
         try {
             const body = new TextEncoder().encode(
                 JSON.stringify(snapshot.feed),

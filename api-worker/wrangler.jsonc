@@ -15,7 +15,7 @@
         "ENRICHMENT_BATCH_SIZE": "100",
         "ENRICHMENT_REFRESH_DAYS": "30"
     },
-    "triggers": { "crons": ["*/15 * * * *"] },
+    "triggers": { "crons": ["0 * * * *", "*/15 * * * *"] },
     "secrets": {
         "required": ["GOOGLE_MAPS_API_KEY"]
     },
