@@ -1,0 +1,29 @@
+blueprint:
+  name: FuelWatch — low fuel remaining
+  description: Run an action when a vehicle's valid fuel-remaining sensor drops below a chosen number of litres.
+  domain: automation
+  input:
+    remaining_entity:
+      name: Fuel remaining sensor (L)
+      selector:
+        entity:
+          domain: sensor
+          integration: fuelwatch_wa
+    threshold:
+      name: Fuel remaining threshold (L)
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 1000
+          mode: box
+    action_to_run:
+      name: Action to run
+      selector:
+        action: {}
+triggers:
+  - trigger: numeric_state
+    entity_id: !input remaining_entity
+    below: !input threshold
+actions: !input action_to_run
+mode: single

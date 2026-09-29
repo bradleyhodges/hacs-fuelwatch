@@ -1,0 +1,24 @@
+blueprint:
+  name: FuelWatch — worthwhile detour
+  description: Run your selected action when a configured comparison becomes worthwhile. Missing inputs leave the comparison unavailable and do not trigger this automation.
+  domain: automation
+  input:
+    comparison:
+      name: Worth the detour entity
+      selector:
+        entity:
+          domain: binary_sensor
+          integration: fuelwatch_wa
+    action_to_run:
+      name: Action to run
+      selector:
+        action: {}
+triggers:
+  - trigger: state
+    entity_id: !input comparison
+    to: 'on'
+conditions:
+  - condition: template
+    value_template: "{{ this.attributes.last_triggered is none or (now() - this.attributes.last_triggered).total_seconds() > 3600 }}"
+actions: !input action_to_run
+mode: single
