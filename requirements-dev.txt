@@ -1,0 +1,5 @@
+homeassistant==2026.9.4
+home-assistant-frontend==20260826.7
+pytest-homeassistant-custom-component==0.13.367
+defusedxml==0.7.1
+ruff==0.16.9
