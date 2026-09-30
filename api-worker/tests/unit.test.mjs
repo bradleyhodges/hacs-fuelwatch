@@ -11,7 +11,7 @@ const output = fileURLToPath(
 await build({
     stdin: {
         contents:
-            'export * from "./src/cache"; export * from "./src/query"; export * from "./src/feed"; export * from "./src/upstream"; export * from "./src/fuelwatch"; export * from "./src/snapshot"; export * from "./src/jsonapi";',
+            'export * from "./src/cache"; export * from "./src/query"; export * from "./src/feed"; export * from "./src/upstream"; export * from "./src/fuelwatch"; export * from "./src/snapshot"; export * from "./src/jsonapi"; export * from "./src/references"; export * from "./src/station";',
         resolveDir: fileURLToPath(new URL("..", import.meta.url)),
         loader: "ts",
     },
@@ -26,6 +26,71 @@ const time = (value) => Date.parse(value);
 const query = (value, now = "2026-09-29T16:00:00+08:00") =>
     api.parseQuery(new URLSearchParams(value), time(now));
 const source = new URL("https://source.example/rss");
+
+test("reference registry covers controlled vocabularies with unique permanent IDs", () => {
+    const { brands, siteFeatures, restrictions } = api.REFERENCES;
+    assert.deepEqual(
+        Object.fromEntries(
+            brands
+                .filter((value) => value.code)
+                .map((value) => [value.code, value.name]),
+        ),
+        api.brands,
+    );
+    assert.equal(brands.find((value) => value.name === "BP").code, 5);
+    assert.equal(
+        siteFeatures.find((value) => value.name === "Credit Cards").code,
+        1,
+    );
+    for (const values of [brands, siteFeatures, restrictions]) {
+        assert.equal(
+            new Set(values.map((value) => value.code)).size,
+            values.length,
+        );
+        assert.equal(
+            new Set(values.map((value) => value.name)).size,
+            values.length,
+        );
+        assert.ok(
+            values.every(
+                (value) => Number.isInteger(value.code) && value.code >= 0,
+            ),
+        );
+    }
+    // The parser's controlled labels must never reach serialization without a code assignment.
+    assert.deepEqual(
+        siteFeatures.map((item) => item.name).sort(),
+        [...api.FEATURES].sort(),
+    );
+    assert.deepEqual(
+        restrictions.map((item) => item.name).sort(),
+        [...api.RESTRICTIONS].sort(),
+    );
+});
+
+test("expansion canonicalizes equivalent sets only in rendered cache keys", () => {
+    const first = api.parseExpansion(
+        new URLSearchParams("product=1&expand=ALL"),
+    );
+    const second = api.parseExpansion(
+        new URLSearchParams(
+            "product=1&EXPAND=RESTRICTIONS,brand,siteFEATURES,brand",
+        ),
+    );
+    assert.deepEqual(first.expand, second.expand);
+    const compact = query("product=1");
+    assert.equal(first.filters.toString(), "product=1");
+    const url = new URL("https://worker.example/v1");
+    assert.equal(
+        api.cacheKey(url, compact, first.expand).url,
+        api.cacheKey(url, compact, second.expand).url,
+    );
+    assert.notEqual(
+        api.cacheKey(url, compact, first.expand).url,
+        api.cacheKey(url, compact).url,
+    );
+    assert.equal(compact.canonical.has("Expand"), false);
+});
 
 test("response freshness stops at provider refresh and hard age boundaries", () => {
     const now = time("2026-09-29T08:00:00Z");
@@ -172,7 +237,7 @@ test("worker output matches the Home Assistant contract fixture", async () => {
     const fields = Object.entries({
         title: "Example",
         description: "Station description",
-        brand: "Example",
+        brand: "BP",
         date: expected.meta.sourceDate,
         price: "185.9",
         "trading-name": "Example Station",
@@ -188,16 +253,27 @@ test("worker output matches the Home Assistant contract fixture", async () => {
         expected.meta.sourceDate,
     );
     const now = time(expected.meta.fetchedAt);
+    const document = await api.jsonApiDocument(
+        {
+            ...feed,
+            items: feed.items.map((item) => ({ ...item, product: 1 })),
+        },
+        api.metadata(query(""), feed.items.length, now),
+        undefined,
+        now,
+    );
+    // JSON:API meta is extensible; verify every consumer-required field while
+    // allowing informational additions such as copyright and documentation links.
     assert.deepEqual(
-        await api.jsonApiDocument(
-            {
-                ...feed,
-                items: feed.items.map((item) => ({ ...item, product: 1 })),
-            },
-            api.metadata(query(""), feed.items.length, now),
-            undefined,
-            now,
-        ),
+        {
+            ...document,
+            meta: Object.fromEntries(
+                Object.keys(expected.meta).map((key) => [
+                    key,
+                    document.meta[key],
+                ]),
+            ),
+        },
         expected,
     );
 });
@@ -586,4 +662,22 @@ test("catalogue defaults to every fuel and bounds source-filter expansion only",
             expected,
         );
     }
+});
+
+test("unknown brands retain source text and unavailable references keep their empty shape", () => {
+    const item = station({
+        brand: "New Unmapped Brand",
+        "site-features": "",
+        restrictions: "",
+    });
+    const coded = api.codeStation(item, []);
+    assert.equal(coded.brand, 0);
+    assert.equal(coded.sourceNotes.brand, "New Unmapped Brand");
+    assert.deepEqual(coded.siteFeatures, []);
+    assert.equal(coded.restrictions, null);
+    assert.deepEqual(api.codeStation(item, ["brand"]).brand, {
+        code: 0,
+        name: "New Unmapped Brand",
+        logo: "/static/image/brand/generic.svg",
+    });
 });

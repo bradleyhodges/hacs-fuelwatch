@@ -14,6 +14,7 @@ import aiohttp
 from .const import FEED_SOURCE, FEED_URL, MAX_RESPONSE, MAX_STATIONS, PERTH, PRODUCTS, VERSION
 from .engine import decimal
 from .models import FeedSnapshot, Quote
+from .references import brand_label
 from .station import StationDetails
 
 
@@ -182,7 +183,7 @@ def parse_snapshot(payload: bytes, product: str, expected_date: date) -> FeedSna
                 day=expected_date,
                 price=decimal(per_litre, minimum="0.001", maximum=10000),
                 name=field("name"),
-                brand=field("brand", False) or "Independent",
+                brand=brand_label(item),
                 address=address,
                 suburb=suburb,
                 latitude=latitude,

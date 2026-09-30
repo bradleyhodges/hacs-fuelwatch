@@ -52,6 +52,8 @@ export type OpeningHours = Partial<Record<Weekday, string>>;
 
 /** Unclassified source information is retained outside the controlled feature/restriction lists. */
 export interface SourceNotes {
+    /** Original source label when no stable brand code is assigned yet. */
+    brand?: string;
     features?: string[];
     restrictions?: string[];
     openHours?: string;

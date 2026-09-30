@@ -13,6 +13,47 @@ from custom_components.fuelwatch_wa.api import FeedError, parse_feed
 DAY = date(2026, 9, 29)
 
 
+@pytest.mark.parametrize("expanded", [False, True])
+def test_station_reference_codes_and_expanded_objects_keep_human_labels(expanded):
+    document = json.loads(feed())
+    item = document["data"][0]["attributes"]
+    item["brand"] = (
+        {"code": 5, "name": "BP", "logo": "/static/image/brand/bp.svg"} if expanded else 5
+    )
+    item["siteFeatures"] = (
+        [{"code": 1, "name": "Credit Cards"}, {"code": 4, "name": "ATM"}] if expanded else [1, 4]
+    )
+    item["restrictions"] = [{"code": 3, "name": "Membership Required"}] if expanded else [3]
+    quote = parse_feed(json.dumps(document).encode(), "1", DAY)[0]
+    assert quote.brand == "BP"
+    assert quote.details.site_features == ("Credit Cards", "ATM")
+    assert quote.details.restrictions == ("Membership Required",)
+
+
+@pytest.mark.parametrize(
+    "brand", [True, 999, {"code": 5, "name": "Shell"}, {"code": True, "name": "BP"}]
+)
+def test_invalid_reference_codes_or_conflicting_names_reject_the_snapshot(brand):
+    with pytest.raises(FeedError):
+        parse_feed(feed(brand=brand), "1", DAY)
+
+
+def test_unmapped_brand_retains_its_source_name_in_compact_and_expanded_forms():
+    for brand in [0, {"code": 0, "name": "Quest Fuel", "logo": "/static/image/brand/generic.svg"}]:
+        document = json.loads(feed(brand=brand))
+        document["data"][0]["attributes"]["sourceNotes"] = {"brand": "Quest Fuel"}
+        quote = parse_feed(json.dumps(document).encode(), "1", DAY)[0]
+        assert quote.brand == "Quest Fuel"
+        assert dict(quote.details.source_notes)["brand"] == "Quest Fuel"
+
+
+def test_shared_worker_fixture_uses_compact_codes_and_decodes_them():
+    path = Path(__file__).parents[1] / "api-worker/tests/fixtures/fuelwatch-v1.json"
+    payload = path.read_bytes()
+    assert json.loads(payload)["data"][0]["attributes"]["brand"] == 5
+    assert parse_feed(payload, "1", DAY)[0].brand == "BP"
+
+
 def feed(price=185.9, day="2026-09-29", brand="Test"):
     fixture = Path(__file__).parents[1] / "api-worker/tests/fixtures/fuelwatch-v1.json"
     data = json.loads(fixture.read_text())

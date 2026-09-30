@@ -17,7 +17,7 @@
             "id": "2026-09-29:238232d151f5f92bbce32951b828cb7fe4887fdc1ac868628c7ab33d4eda4e3b",
             "attributes": {
                 "name": "Example Station",
-                "brand": "Example",
+                "brand": 5,
                 "price": {
                     "asAt": "2026-09-29T06:00:00.000+08:00",
                     "products": {

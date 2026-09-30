@@ -1,5 +1,6 @@
 /target
 /dist
+/public
 **/*.rs.bk
 Cargo.lock
 bin/

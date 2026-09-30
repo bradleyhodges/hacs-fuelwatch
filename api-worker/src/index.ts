@@ -1,3 +1,4 @@
+import { BRAND_ASSET_PATH, brandAsset } from "./assets";
 import {
     cacheKey,
     cacheTtl,
@@ -17,6 +18,7 @@ import {
     validateJsonApiHeaders,
 } from "./jsonapi";
 import { parseQuery, perthTimestamp } from "./query";
+import { parseExpansion } from "./references";
 import { pruneSnapshots } from "./snapshot-cache";
 import { normalisePhone } from "./station";
 import { HOURLY_CRON, warmSnapshots } from "./warm";
@@ -75,10 +77,12 @@ export default {
         const legacy = new URL(request.url).pathname === "/legacy";
         try {
             const url = new URL(request.url);
+            const asset = BRAND_ASSET_PATH.test(url.pathname);
             if (
                 url.pathname !== "/v1" &&
                 url.pathname !== "/legacy" &&
-                url.pathname !== "/"
+                url.pathname !== "/" &&
+                !asset
             )
                 throw new ApiError(404, "not_found", "Endpoint not found.");
 
@@ -89,6 +93,7 @@ export default {
                     "method_not_allowed",
                     "Use GET or HEAD to request prices.",
                 );
+            if (asset) return await brandAsset(request, env);
             // Keep shorthand URLs usable in browsers, including CORS preflights and HEAD.
             if (url.pathname === "/") {
                 url.pathname = "/v1";
@@ -102,12 +107,15 @@ export default {
                 });
             }
             if (!legacy) validateJsonApiHeaders(request.headers);
+            const representation = legacy
+                ? { filters: url.searchParams, expand: [] }
+                : parseExpansion(url.searchParams);
             const query = parseQuery(
-                url.searchParams,
+                representation.filters,
                 started,
                 legacy ? "legacy" : "catalogue",
             );
-            const key = cacheKey(url, query);
+            const key = cacheKey(url, query, representation.expand);
             const cached = await readCache(caches.default, key, started);
             if (cached) return deliver(cached, request, "HIT");
             const snapshot = await loadCatalogue(
@@ -139,7 +147,13 @@ export default {
             );
             const body = JSON.stringify(
                 url.pathname === "/v1"
-                    ? await jsonApiDocument(feed, info, enrichment, now)
+                    ? await jsonApiDocument(
+                          feed,
+                          info,
+                          enrichment,
+                          now,
+                          representation.expand,
+                      )
                     : {
                           feed: {
                               ...feed,

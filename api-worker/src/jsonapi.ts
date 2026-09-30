@@ -1,10 +1,14 @@
 import { ApiError } from "./errors";
 import type { FeedMetadata } from "./feed";
 import type { FuelWatchProductId } from "./fuelwatch";
+import {
+    type CodedStation,
+    codeStation,
+    type ExpandableField,
+} from "./references";
 import type { ProductFeed } from "./snapshot";
 import {
     normaliseStation,
-    type Station,
     type StationEnrichment,
     stationKey,
 } from "./station";
@@ -16,7 +20,7 @@ export const JSON_API_MEDIA_TYPE = "application/vnd.api+json";
 export interface ServiceStationResource {
     type: "serviceStation";
     id: string;
-    attributes: Omit<Station, "price"> & {
+    attributes: Omit<CodedStation, "price"> & {
         price: {
             asAt: string;
             products: Partial<Record<FuelWatchProductId, number>>;
@@ -33,6 +37,7 @@ export interface FuelPriceDocument {
 
 /**
  * Group all selected products into one JSON:API serviceStation resource per station/date.
+ * @param expand References to populate with names; omitted references remain numeric wire codes.
  * @remarks Hash each station only once per document, even when several requested fuels share it.
  * Names, brands, prices and enrichment updates do not change resource IDs. The existing integration
  * continues deriving its station selector separately so saved user selections survive this API change.
@@ -42,6 +47,7 @@ export async function jsonApiDocument(
     meta: FeedMetadata,
     profiles: ReadonlyMap<string, StationEnrichment> = new Map(),
     now = Date.now(),
+    expand: readonly ExpandableField[] = [],
 ): Promise<FuelPriceDocument> {
     const stations = new Map<string, ServiceStationResource["attributes"]>();
     // Product order, rather than asynchronous fetch completion, chooses the station's source fields.
@@ -49,7 +55,10 @@ export async function jsonApiDocument(
         const key = stationKey(item);
         let attributes = stations.get(key);
         if (!attributes) {
-            const station = normaliseStation(item, profiles.get(key), now);
+            const station = codeStation(
+                normaliseStation(item, profiles.get(key), now),
+                expand,
+            );
             attributes = {
                 ...station,
                 price: { asAt: station.price.asAt, products: {} },

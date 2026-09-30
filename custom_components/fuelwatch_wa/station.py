@@ -6,6 +6,7 @@ from datetime import datetime
 from urllib.parse import urlsplit
 
 from .const import PERTH
+from .references import reference_labels
 
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
@@ -114,6 +115,7 @@ class StationDetails:
             raise ValueError("Invalid source notes")
         source_notes = []
         for original, public in (
+            ("brand", "brand"),
             ("features", "features"),
             ("restrictions", "restrictions"),
             ("openHours", "open_hours"),
@@ -132,9 +134,11 @@ class StationDetails:
             postcode,
             phone,
             is_24_hours,
-            texts(item.get("siteFeatures", [])),
+            reference_labels(item.get("siteFeatures", []), "siteFeatures"),
             tuple((day, text(hours[day], 150)) for day in WEEKDAYS if day in hours),
-            texts(item["restrictions"]) if item.get("restrictions") is not None else None,
+            reference_labels(item["restrictions"], "restrictions")
+            if item.get("restrictions") is not None
+            else None,
             tuple(source_notes),
             Enrichment.from_api(item["enrichment"]) if item.get("enrichment") is not None else None,
         )

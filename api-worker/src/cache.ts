@@ -1,5 +1,6 @@
 import type { FeedMetadata } from "./feed";
 import { type FeedQuery, perthDate, shiftDate } from "./query";
+import type { ExpandableField } from "./references";
 import type { StationEnrichment } from "./station";
 
 /**
@@ -46,12 +47,18 @@ export function cacheTtl(info: FeedMetadata, now: number): number {
 }
 
 /** Cache identity contains no client headers, ignored filters or relative dates. */
-export function cacheKey(request: URL, query: FeedQuery): Request {
+export function cacheKey(
+    request: URL,
+    query: FeedQuery,
+    expand: readonly ExpandableField[] = [],
+): Request {
     const url = new URL(
-        `/__fuelwatch_cache/service-station-v1/${request.pathname === "/legacy" ? "legacy" : "compact"}`,
+        `/__fuelwatch_cache/service-station-codes-v1/${request.pathname === "/legacy" ? "legacy" : "compact"}`,
         request.origin,
     );
     url.search = query.canonical.toString();
+    if (expand.length)
+        url.searchParams.set("Expand", [...new Set(expand)].sort().join(","));
     return new Request(url, { method: "GET" });
 }
 

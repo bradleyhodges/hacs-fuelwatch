@@ -66,6 +66,61 @@ afterEach(async () => {
 const fetchWorker = (path = "/legacy", init) =>
     worker.dispatchFetch(`https://fuelwatch.example${path}`, init);
 
+test("codes are the default and expansion changes representation without fetching more prices", async () => {
+    origin = () =>
+        new Response(
+            xml(
+                "<site-features>ATM, Toilets</site-features><restrictions>Membership Required</restrictions>",
+            ).replace("<brand>Example</brand>", "<brand>BP</brand>"),
+        );
+    const compactResponse = await fetchWorker("/v1?product=1");
+    const compact = await compactResponse.json();
+    const attributes = compact.data[0].attributes;
+    assert.equal(attributes.brand, 5);
+    assert.deepEqual(attributes.siteFeatures, [4, 5]);
+    assert.deepEqual(attributes.restrictions, [3]);
+    const expandedResponse = await fetchWorker("/v1?product=1&expand=all");
+    const expanded = await expandedResponse.json();
+    assert.deepEqual(expanded.data[0].attributes.brand, {
+        code: 5,
+        name: "BP",
+        logo: "/static/image/brand/bp.svg",
+    });
+    assert.deepEqual(expanded.data[0].attributes.siteFeatures, [
+        { code: 4, name: "ATM" },
+        { code: 5, name: "Toilets" },
+    ]);
+    assert.deepEqual(expanded.data[0].attributes.restrictions, [
+        { code: 3, name: "Membership Required" },
+    ]);
+    assert.equal(expanded.data[0].id, compact.data[0].id);
+    assert.notEqual(
+        expandedResponse.headers.get("ETag"),
+        compactResponse.headers.get("ETag"),
+    );
+    const selective = await fetchWorker("/v1?PRODUCT=1&ExPaNd=BRAND,brand");
+    const fields = (await selective.json()).data[0].attributes;
+    assert.deepEqual(fields.brand, expanded.data[0].attributes.brand);
+    assert.deepEqual(fields.siteFeatures, [4, 5]);
+    assert.equal(requests.length, 1);
+    assert.equal(new URL(requests[0]).searchParams.has("expand"), false);
+});
+
+test("invalid expansion is rejected before upstream access", async () => {
+    for (const query of [
+        "expand=",
+        "expand=nope",
+        "expand=brand,",
+        "expand=all,nope",
+        "expand=brand&EXPAND=restrictions",
+        "filter[expand]=brand",
+    ]) {
+        const response = await fetchWorker(`/v1?${query}`);
+        assert.equal(response.status, 400, query);
+    }
+    assert.equal(requests.length, 0);
+});
+
 test("v1 defaults to every product grouped into one serviceStation and reuses its catalogue", async () => {
     origin = (request) =>
         new Response(
@@ -599,13 +654,13 @@ test("case-insensitive brand/product selections reuse complete product catalogue
     assert.deepEqual(
         body.data.map(({ attributes: a }) => [a.brand, a.price.products]),
         [
-            ["Ampol", { 1: 181, 2: 182, 6: 186 }],
-            ["EG Ampol", { 1: 181, 2: 182, 6: 186 }],
+            [2, { 1: 181, 2: 182, 6: 186 }],
+            [35, { 1: 181, 2: 182, 6: 186 }],
         ],
     );
     assert.equal(requests.length, 3);
     const changed = await fetchWorker("/v1?BRAND=5&PRODUCT=6,2,1");
-    assert.equal((await changed.json()).data[0].attributes.brand, "BP");
+    assert.equal((await changed.json()).data[0].attributes.brand, 5);
     assert.equal(requests.length, 3);
     assert.equal(changed.headers.get("X-FuelWatch-Snapshot-Cache"), "HIT");
     const equivalent = await fetchWorker(

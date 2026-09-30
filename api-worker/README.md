@@ -33,9 +33,9 @@ From the repository root, `python tools/test_api_adapter.py` runs the real Pytho
 - `HEAD`: the same status and headers as GET, without a response body; shares its cache entry.
 - `OPTIONS`: public CORS preflight. GET, HEAD and OPTIONS are the only allowed methods.
 
-Both data endpoints accept case-insensitive query names and text values. The standard syntax uses `filter[product]`, `filter[brand]`, `filter[region]`, `filter[suburb]`, `filter[day]` and `filter[surrounding]`. Short names in the table below remain compatibility aliases: `PRODUCT=1` and `filter[Product]=1` select the same cached response. Mixing aliases for one parameter is rejected as a duplicate.
+Both data endpoints accept case-insensitive query names and text values. The standard syntax uses `filter[product]`, `filter[brand]`, `filter[region]`, `filter[suburb]`, `filter[day]` and `filter[surrounding]`. Short filter names in the table below remain compatibility aliases: `PRODUCT=1` and `filter[Product]=1` select the same cached response. Mixing aliases for one parameter is rejected as a duplicate.
 
-JSON:API reserves all-lowercase custom top-level query names. Retaining short aliases is an explicit compatibility extension; use `filter[...]` for standard-compliant requests. Success/error document structure and media negotiation follow [JSON:API 1.1](https://jsonapi.org/format/). `/legacy` retains its former RSS-shaped contract, hyphenated keys and `application/json` content type.
+JSON:API reserves all-lowercase custom top-level query names. Retaining short aliases and the requested `expand` parameter is an explicit compatibility extension; use `filter[...]` for standard-compliant requests. Success/error document structure and media negotiation follow [JSON:API 1.1](https://jsonapi.org/format/). `/legacy` retains its former RSS-shaped contract, hyphenated keys and `application/json` content type.
 
 | Parameter | Accepted values | Default |
 | --- | --- | --- |
@@ -93,7 +93,7 @@ Example document:
             "id": "2026-09-29:238232d151f5f92bbce32951b828cb7fe4887fdc1ac868628c7ab33d4eda4e3b",
             "attributes": {
                 "name": "Example Station",
-                "brand": "Example",
+                "brand": 5,
                 "price": {
                     "asAt": "2026-09-29T06:00:00.000+08:00",
                     "products": {
@@ -125,7 +125,118 @@ Phone parsing uses `libphonenumber-js` with the Australian default region, stric
 
 Opening hours use local Perth wall times: `HH:mm-HH:mm`, comma-separated split shifts, or `Closed`. Closing at `24:00` is allowed; a closing time before the opening time denotes the following day. FuelWatch weekday ranges expand into named days. Google's overnight periods split at midnight. Unknown days are omitted, not inferred closed from a partial FuelWatch schedule. `is24Hours` is `true` for confirmed continuous opening, `false` for a known limited schedule, and `null` when unknown. Confirmed 24-hour stations omit `openHours`. Malformed source schedules remain in `sourceNotes.openHours` and block Google replacement.
 
-`siteFeatures` and `restrictions` use the exact labels exported by `FEATURES` and `RESTRICTIONS` in `src/station.ts`. Order is deterministic and duplicates are removed. Features include Fuel Cards, ATM, Toilets, Bottled Gas, Trailer Hire, EFTPOS, Restaurant, Carwash, Workshop, Air, Water, Ice, Discount, Voucher, Bottled AdBlue, Pumped AdBlue, Truck Friendly, Convenience Store, Credit Cards, Debit Cards and Open 24 hours. Restrictions are Unmanned site (credit card charges may apply), Entry Permit Required, Membership Required and Low Aromatic Fuel. Unknown text is preserved separately in `sourceNotes.features` or `sourceNotes.restrictions`; it never silently enters the controlled vocabulary. Empty features are `[]`; no known restrictions is `null`.
+`brand`, `siteFeatures` and `restrictions` contain stable numeric codes by default. Features and restrictions retain their deterministic source-normalization ordering; duplicate values are removed. Empty features are `[]`; no known restrictions is `null`. Unknown feature/restriction text is preserved in `sourceNotes.features` or `sourceNotes.restrictions`, never assigned a made-up code. Unmapped brands use reserved code `0` with the original name in `sourceNotes.brand`; their expanded object also retains that original name. Code `15` still means Independent.
+
+### Reference expansion and logos
+
+Use `expand=brand`, `expand=siteFeatures,restrictions`, or `expand=all`. Parameter names and values are case-insensitive; whitespace and duplicate list members are normalized. `all` is equivalent to specifying all three fields, including when combined with another valid field. An omitted parameter keeps every reference compact. Empty values/members, unknown fields and repeated `expand` parameter names return HTTP 400 before cache or upstream access. Expansion applies only to `/v1`; `/legacy` keeps string labels and rejects `expand`.
+
+```sh
+curl 'https://fuelwatch.oss.bhodges.me/v1?product=1&expand=brand'
+curl 'https://fuelwatch.oss.bhodges.me/v1?product=1,2&expand=brand,siteFeatures'
+curl 'https://fuelwatch.oss.bhodges.me/v1?expand=all'
+```
+
+For example, `"brand": 5` expands to:
+
+```json
+{"code": 5, "name": "BP", "logo": "/static/image/brand/bp.svg"}
+```
+
+And `"siteFeatures": [1, 4]` expands to:
+
+```json
+[{"code": 1, "name": "Credit Cards"}, {"code": 4, "name": "ATM"}]
+```
+
+Restrictions use the same `{code, name}` shape. Other station fields and price product keys retain their existing shape. Expansion changes rendered response cache keys and ETags; it does **not** change D1 snapshot keys or request any additional RSS/Google data. Equivalent expansion sets share a cache entry. Compact and expanded variants retain the same station IDs and original price fetch time.
+
+Resolve root-relative `logo` URLs against the API origin. `GET` and `HEAD /static/image/brand/<filename>.svg` serve the supplied SVGs with ETags, a one-day cache lifetime, public CORS, `nosniff` and a restrictive SVG content security policy. Static image loads support simple CORS; Cloudflare Static Assets rejects other methods. Successful image requests bypass the price Worker entirely. Missing paths return 404; they do not redirect to a home page or contact FuelWatch.
+
+Wrangler's custom build automatically stages the original logos from `../custom_components/fuelwatch_wa/assets/brands` into ignored `public/static/image/brand`. Only SVGs are copied, and the build checks every advertised logo exists. Artwork remains in the integration directory as the single source; edits are watched by `wrangler dev`. The generated `_headers` rules come from `src/asset-headers.json`, and the assets binding handles script fallback requests. Deploy from the repository checkout so both the shared registry and source artwork are present.
+
+Ampol (2), BOC (4), Independent (15), OTR (42), OMG Caltex (48), and unknown brands (0) currently use `generic.svg` because no matching brand-specific artwork was supplied. A generic logo never changes the brand code or name.
+
+The shared registry is `../custom_components/fuelwatch_wa/reference_data.json`, bundled by the Worker and shipped with Home Assistant. Brand codes match FuelWatch. Feature/restriction codes are explicit API identifiers, **not array positions**: never renumber, recycle or reassign existing codes. Add new records deliberately, update normalization when needed, and ship the matching integration registry. Tests check coverage of every controlled label and real asset delivery for every advertised logo. The adapter accepts compact codes, expanded objects and previous string labels, preserving existing human-readable entity attributes and saved vendor filters.
+
+#### Brand codes
+
+| Code | Name |
+| --- | --- |
+| 0 | Unknown |
+| 2 | Ampol |
+| 3 | Better Choice |
+| 4 | BOC |
+| 5 | BP |
+| 6 | Caltex |
+| 7 | Gull |
+| 10 | Liberty |
+| 11 | Mobil |
+| 14 | Shell |
+| 15 | Independent |
+| 23 | United |
+| 24 | Eagle |
+| 25 | FastFuel 24/7 |
+| 26 | Puma |
+| 27 | Vibe |
+| 29 | 7-Eleven |
+| 30 | Metro Petroleum |
+| 31 | WA Fuels |
+| 32 | Costco |
+| 34 | Atlas |
+| 35 | EG Ampol |
+| 36 | CGL fuel |
+| 37 | X Convenience |
+| 38 | Phoenix |
+| 39 | Burk |
+| 40 | Petro Fuels |
+| 41 | Astron |
+| 42 | OTR |
+| 43 | Reddy Express |
+| 44 | Dunning's |
+| 45 | Perrys |
+| 46 | UGO |
+| 47 | Maisey Fuels |
+| 48 | OMG Caltex |
+| 49 | OMG Metro |
+| 50 | Solo |
+| 52 | Broome Diesel |
+| 53 | Fuel Tech |
+
+#### Site feature codes
+
+| Code | Name |
+| --- | --- |
+| 1 | Credit Cards |
+| 2 | Debit Cards |
+| 3 | Fuel Cards |
+| 4 | ATM |
+| 5 | Toilets |
+| 6 | Bottled Gas |
+| 7 | Trailer Hire |
+| 8 | EFTPOS |
+| 9 | Restaurant |
+| 10 | Carwash |
+| 11 | Workshop |
+| 12 | Air |
+| 13 | Water |
+| 14 | Ice |
+| 15 | Discount |
+| 16 | Voucher |
+| 17 | Bottled AdBlue |
+| 18 | Pumped AdBlue |
+| 19 | Truck Friendly |
+| 20 | Convenience Store |
+| 21 | Open 24 hours |
+
+#### Restriction codes
+
+| Code | Name |
+| --- | --- |
+| 1 | Unmanned site (credit card charges may apply) |
+| 2 | Entry Permit Required |
+| 3 | Membership Required |
+| 4 | Low Aromatic Fuel |
 
 Google can add explicitly reported facilities and supply missing phone/postcode/hours. Existing FuelWatch hours win per weekday, including explicit closed days. A station with FuelWatch's `Open 24 hours` cannot acquire a narrower Google schedule. Added fields carry `enrichment` metadata: provider, place ID, fetched timestamp, stale flag, affected field names, Google Maps URL and third-party attributions. Consumers displaying these fields should retain the accompanying attribution. The Home Assistant adapter retains station details and attribution in its saved snapshots, entity attributes and dashboard.
 
@@ -166,7 +277,7 @@ Price warming runs without Google credentials or enrichment budget. `feeds_warme
 
 ## Deploy and operate
 
-Install the updated Home Assistant integration before deploying this Worker. Its adapter accepts both the previous `fuelPrices` and new `serviceStation` resources; older integration versions cannot parse grouped prices. The new edge-cache namespace prevents cached old response documents from leaking into the new contract after deployment.
+Install the updated Home Assistant integration before deploying this Worker. Its adapter accepts previous string labels, numeric codes and expanded references (as well as the older `fuelPrices` resource). Older integration versions cannot parse compact brand/feature/restriction codes. The new edge-cache namespace prevents cached old response documents from leaking into the new contract after deployment.
 
 Authenticate Wrangler to the Cloudflare account containing the `bhodges.me` zone. `wrangler.jsonc` binds the existing `fuelwatch` D1 database as `FUELWATCH_DB`. Apply the migration before deploying:
 
@@ -182,7 +293,7 @@ The key must belong to a billing-enabled Google project with **Places API (New)*
 
 Wrangler's Custom Domain configuration provisions the hostname; `workers.dev` is disabled. `FUELWATCH_URL` must remain an HTTPS origin URL without credentials. Clients of the public read-only endpoint need no API key.
 
-This changes the `/v1` document contract: deploy the worker and matching integration update together. After deployment, verify a real `/v1?filter[product]=1&filter[day]=today` response, a subsequent cache hit, a HEAD request and a rejected invalid query. Deploy the worker before distributing the updated Home Assistant integration. A deployment dry run does not verify DNS, account permissions or live Cloudflare behaviour.
+This changes the `/v1` document contract: deploy the worker and matching integration update together. After deployment, verify a real `/v1?filter[product]=1&filter[day]=today` response, a subsequent cache hit, a HEAD request and a rejected invalid query. Distribute the updated Home Assistant integration before deploying this breaking response change. A deployment dry run does not verify DNS, account permissions or live Cloudflare behaviour.
 
 Structured Workers logs include `feed_response` (products, `snapshotCache`, upstream selection count, date, quote count, elapsed time and HTTP TTL), `snapshot_cache_unavailable` (operation), `snapshot_cache_corrupt`, `upstream_http_error` (HTTP status and attempt), `request_failed`, `cache_read_failed` and `cache_write_failed`. A shared hit logs zero upstream requests; transport retries are logged separately. Observability currently samples every invocation; review retention and sampling as traffic grows. Alert on sustained 502/503/504 rates, repeated cache failures and unexpectedly empty current-period feeds. `pnpm exec wrangler tail` streams logs.
 
